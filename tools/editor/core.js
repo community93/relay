@@ -1,0 +1,10 @@
+export {EditorState, StateEffect, Compartment, Prec} from '@codemirror/state';
+export {EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection, placeholder} from '@codemirror/view';
+export {history, isolateHistory, historyKeymap, defaultKeymap, indentWithTab, undo, redo} from '@codemirror/commands';
+export {syntaxHighlighting, HighlightStyle, bracketMatching, indentOnInput, indentUnit, foldGutter, foldKeymap, syntaxTree} from '@codemirror/language';
+export {closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap, acceptCompletion} from '@codemirror/autocomplete';
+export {json} from '@codemirror/lang-json';
+export {parser as jsonParser} from '@lezer/json';
+export {linter, lintGutter, setDiagnostics} from '@codemirror/lint';
+export {search, searchKeymap, highlightSelectionMatches} from '@codemirror/search';
+export {tags} from '@lezer/highlight';

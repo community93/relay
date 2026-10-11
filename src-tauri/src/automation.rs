@@ -1,0 +1,158 @@
+//! Session-scoped, authenticated loopback transport. Workspace operations stay in
+//! the frontend so external edits cannot race a second store or bypass checks.
+use serde::Serialize;
+use serde_json::{json, Value};
+use std::{collections::HashMap, sync::{Arc, Mutex}, time::Duration};
+use tauri::{Emitter, Manager};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::{oneshot, Semaphore}};
+
+const BODY_LIMIT: usize = 2 * 1024 * 1024;
+const HEADER_LIMIT: usize = 8192;
+#[derive(Default)]
+pub struct Automation { session: Mutex<Option<Session>> }
+struct Session {
+    connection: Connection,
+    listener: tokio::task::AbortHandle,
+    pending: HashMap<String, oneshot::Sender<Value>>,
+}
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Connection { enabled: bool, base_url: String, token: String, instance_id: String }
+fn random_id() -> Result<String, String> {
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes).map_err(|e| e.to_string())?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+#[tauri::command]
+pub fn automation_status(state: tauri::State<'_, Automation>) -> Option<Connection> {
+    state.session.lock().unwrap().as_ref().map(|s| s.connection.clone())
+}
+#[tauri::command]
+pub fn automation_stop(state: tauri::State<'_, Automation>) {
+    if let Some(session) = state.session.lock().unwrap().take() { session.listener.abort(); }
+}
+#[tauri::command]
+pub async fn automation_start(app: tauri::AppHandle) -> Result<Connection, String> {
+    if let Some(session) = app.state::<Automation>().session.lock().unwrap().as_ref() { return Ok(session.connection.clone()); }
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.map_err(|e| e.to_string())?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let connection = Connection { enabled: true, base_url: format!("http://127.0.0.1:{port}"), token: random_id()?, instance_id: random_id()? };
+    let backend = app.clone();
+    let accepted = connection.clone();
+    let slots = Arc::new(Semaphore::new(16));
+    // Hold the session lock until registration; simultaneous enable calls reuse it.
+    let manager = app.state::<Automation>();
+    let mut guard = manager.session.lock().unwrap();
+    if let Some(session) = guard.as_ref() { return Ok(session.connection.clone()); }
+    let task = tauri::async_runtime::spawn(async move {
+        loop {
+            let Ok((stream, address)) = listener.accept().await else { break };
+            if !address.ip().is_loopback() { continue; }
+            let Ok(permit) = slots.clone().try_acquire_owned() else { continue };
+            let app = backend.clone(); let config = accepted.clone();
+            tauri::async_runtime::spawn(async move {
+                let _permit = permit;
+                handle(stream, app, config).await;
+            });
+        }
+    });
+    *guard = Some(Session { connection: connection.clone(), listener: task.inner().abort_handle(), pending: HashMap::new() });
+    Ok(connection)
+}
+#[tauri::command]
+pub fn automation_reply(state: tauri::State<'_, Automation>, id: String, instance_id: String, result: Value) {
+    let mut guard = state.session.lock().unwrap();
+    if let Some(session) = guard.as_mut().filter(|s| s.connection.instance_id == instance_id) {
+        if let Some(tx) = session.pending.remove(&id) { let _ = tx.send(result); }
+    }
+}
+struct Request { method: String, path: String, headers: HashMap<String, String>, body: Vec<u8> }
+async fn read_request(stream: &mut TcpStream) -> Result<Request, (u16, &'static str)> {
+    let mut data = Vec::new();
+    let end = loop {
+        if let Some(pos) = data.windows(4).position(|w| w == b"\r\n\r\n") { break pos + 4; }
+        if data.len() > HEADER_LIMIT { return Err((431, "Headers too large")); }
+        let mut buffer = [0; 4096];
+        let n = stream.read(&mut buffer).await.map_err(|_| (400, "Read failed"))?;
+        if n == 0 { return Err((400, "Incomplete request")); }
+        data.extend_from_slice(&buffer[..n]);
+    };
+    if end > HEADER_LIMIT { return Err((431, "Headers too large")); }
+    let text = std::str::from_utf8(&data[..end]).map_err(|_| (400, "Invalid headers"))?;
+    let mut lines = text.split("\r\n");
+    let parts: Vec<_> = lines.next().unwrap_or("").split_whitespace().collect();
+    if parts.len() != 3 || parts[2] != "HTTP/1.1" { return Err((400, "HTTP/1.1 required")); }
+    let method = parts[0].to_string(); let path = parts[1].to_string();
+    let mut headers = HashMap::new();
+    for line in lines.filter(|s| !s.is_empty()) {
+        let (key, value) = line.split_once(':').ok_or((400, "Invalid header"))?;
+        let key = key.trim().to_ascii_lowercase();
+        if headers.insert(key, value.trim().to_string()).is_some() { return Err((400, "Duplicate header")); }
+    }
+    if headers.contains_key("transfer-encoding") { return Err((400, "Chunked requests unsupported")); }
+    let length = headers.get("content-length").map(|s| s.parse::<usize>()).transpose().map_err(|_| (400, "Invalid length"))?.unwrap_or(0);
+    if length > BODY_LIMIT { return Err((413, "Body too large")); }
+    let mut body = data[end..].to_vec();
+    if body.len() > length { return Err((400, "Unexpected body")); }
+    while body.len() < length {
+        let mut buffer = [0; 8192];
+        let n = stream.read(&mut buffer[..(length - body.len()).min(8192)]).await.map_err(|_| (400, "Read failed"))?;
+        if n == 0 { return Err((400, "Incomplete body")); }
+        body.extend_from_slice(&buffer[..n]);
+    }
+    Ok(Request { method, path, headers, body })
+}
+fn authorize(request: &Request, config: &Connection) -> Result<(), (u16, &'static str)> {
+    if request.headers.contains_key("origin") || request.headers.get("sec-fetch-site").is_some_and(|s| s != "none") { return Err((403, "Browser origins are not allowed")); }
+    if request.headers.get("host").map(String::as_str) != config.base_url.strip_prefix("http://") { return Err((403, "Invalid host")); }
+    if request.headers.get("authorization") != Some(&format!("Bearer {}", config.token)) { return Err((401, "Authentication required")); }
+    Ok(())
+}
+async fn response(stream: &mut TcpStream, status: u16, value: Value) {
+    let body = serde_json::to_vec(&value).unwrap_or_default();
+    let header = format!("HTTP/1.1 {status} Result\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n", body.len());
+    let _ = tokio::time::timeout(Duration::from_secs(10), async {
+        stream.write_all(header.as_bytes()).await?;
+        stream.write_all(&body).await
+    }).await;
+}
+async fn handle(mut stream: TcpStream, app: tauri::AppHandle, config: Connection) {
+    let request = match tokio::time::timeout(Duration::from_secs(10), read_request(&mut stream)).await {
+        Ok(Ok(request)) => request,
+        other => { let (status, message) = other.ok().and_then(Result::err).unwrap_or((408, "Request timeout")); response(&mut stream, status, json!({"ok":false,"error":{"code":"transport","message":message}})).await; return; }
+    };
+    if let Err((status, message)) = authorize(&request, &config) { response(&mut stream, status, json!({"ok":false,"error":{"code":"access","message":message}})).await; return; }
+    if request.method == "GET" && request.path == "/v1/health" {
+        response(&mut stream, 200, json!({"ok":true,"data":{"product":"Relay","version":env!("CARGO_PKG_VERSION"),"apiVersion":1,"instanceId":config.instance_id}})).await; return;
+    }
+    if request.method != "POST" || request.path != "/v1/command" { response(&mut stream, 404, json!({"ok":false,"error":{"code":"not_found","message":"Unknown endpoint"}})).await; return; }
+    if !request.headers.get("content-type").is_some_and(|s| s.split(';').next().unwrap_or("").trim() == "application/json") { response(&mut stream, 415, json!({"ok":false,"error":{"code":"content_type","message":"application/json required"}})).await; return; }
+    let payload: Value = match serde_json::from_slice(&request.body) { Ok(value) => value, Err(_) => { response(&mut stream, 400, json!({"ok":false,"error":{"code":"invalid_json","message":"Invalid JSON"}})).await; return; } };
+    let Ok(id) = random_id() else { return };
+    let (tx, rx) = oneshot::channel();
+    let registered = {
+        let manager = app.state::<Automation>(); let mut guard = manager.session.lock().unwrap();
+        if let Some(session) = guard.as_mut().filter(|s| s.connection.instance_id == config.instance_id) { session.pending.insert(id.clone(), tx); true } else { false }
+    };
+    if !registered { response(&mut stream, 503, json!({"ok":false,"error":{"code":"disabled","message":"Connection closed"}})).await; return; }
+    let sent = app.emit_to("main", "relay-automation", json!({"id":id,"instanceId":config.instance_id,"command":payload}));
+    let result = if sent.is_ok() { tokio::time::timeout(Duration::from_secs(30), rx).await.ok().and_then(Result::ok) } else { None };
+    {
+        let manager = app.state::<Automation>(); let mut guard = manager.session.lock().unwrap();
+        if let Some(session) = guard.as_mut() { session.pending.remove(&id); }
+    }
+    let result = result.unwrap_or_else(|| json!({"ok":false,"error":{"code":"unavailable","message":"Workspace unavailable; read current state before retrying writes"}}));
+    let status = if result["ok"] == true { 200 } else { match result["error"]["code"].as_str() { Some("conflict" | "busy") => 409, Some("not_found") => 404, Some("unavailable") => 503, Some("persistence") => 500, _ => 400 } };
+    response(&mut stream, status, result).await;
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn config() -> Connection { Connection { enabled:true, base_url:"http://127.0.0.1:1234".into(),token:"private".into(),instance_id:"instance".into() } }
+    fn request() -> Request { Request { method:"POST".into(),path:"/v1/command".into(),headers:HashMap::from([("host".into(),"127.0.0.1:1234".into()),("authorization".into(),"Bearer private".into())]),body:vec![] } }
+    #[test] fn auth_required() { let mut r=request();r.headers.remove("authorization");assert_eq!(authorize(&r,&config()).unwrap_err().0,401); }
+    #[test] fn browser_denied() { let mut r=request();r.headers.insert("origin".into(),"http://127.0.0.1:1234".into());assert_eq!(authorize(&r,&config()).unwrap_err().0,403); }
+    #[test] fn rebound_host_denied() { let mut r=request();r.headers.insert("host".into(),"attacker.test:1234".into());assert_eq!(authorize(&r,&config()).unwrap_err().0,403); }
+    #[test] fn native_client_allowed() { assert!(authorize(&request(),&config()).is_ok()); }
+    #[test] fn tokens_unique_and_long() { let a=random_id().unwrap();assert_eq!(a.len(),64);assert_ne!(a,random_id().unwrap()); }
+}

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Relay",
+  "version": "0.1.15",
+  "identifier": "app.qoder.relay",
+  "build": {
+    "frontendDist": "../web"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Relay",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 1000,
+        "minHeight": 640,
+        "center": true,
+        "resizable": true,
+        "decorations": false,
+        "backgroundColor": "#FAFBFA",
+        "theme": "Light"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "publisher": "Relay",
+    "copyright": "© 2026 Relay",
+    "category": "DeveloperTool",
+    "shortDescription": "本地优先的接口调试工具",
+    "longDescription": "Relay — HTTP / SSE / WebSocket 接口调试，集合与环境，curl 导入导出。数据全部留在本机。",
+    "icon": [
+      "icons/icon.ico",
+      "icons/128x128.png",
+      "icons/32x32.png"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

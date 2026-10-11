@@ -1,0 +1,4107 @@
+/* Relay Studio — quiet, precise surfaces.
+   Neutral paper, restrained teal, consistent type and spacing. The sheet
+   stays opaque; data, focus and state carry the visual hierarchy. */
+:root {
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", "SF Mono", ui-monospace, monospace;
+
+  /* Windows desktop type ladder: title, section, content, metadata. */
+  --t-h1: 24px;
+  --t-h2: 18px;
+  --t-h3: 14px;
+  --t-body: 13px;
+  --t-sub: 12px;
+  --t-cap: 12px;
+  --track-tight: -0.014em;
+  --track-display: -0.03em;
+  /* Monospace needs its own step: at the UI size a mono face reads larger than
+     the proportional one, so every mono surface was quietly hand-tuned to 13px
+     and then drifted. Say it once here instead of 24 times. */
+  --t-mono: 13px;
+  /* a typographic character used as an icon (× + ⋯) — sized as geometry, not text */
+  --t-glyph: 14px;
+  /* weights actually in use; 500 was written as a literal eight times */
+  --w-medium: 500;
+  --w-strong: 600;
+
+  /* Shared corner scale. Changes affect menus, dialogs and editors together;
+     tune individual components locally and review all light/dark palettes. */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r: 8px;
+  --r-lg: 10px;
+  --r-xl: 12px;
+  --r-pill: 999px;
+  --rail: 0px;
+  --sidebar: 268px;
+  --status-h: 28px;
+
+  /* one 8pt ladder, so nothing is ever spaced by feel */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --pad-x: 26px;
+  --row-h: 38px;
+
+  /* motion: four verbs, four durations, one family of curves.
+     --ease is how iOS decelerates an arrival, --ease-spring is the overshoot
+     a control gets when it settles, --ease-out is how things leave. */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-spring: cubic-bezier(0.34, 1.3, 0.48, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ui-zoom: 1;
+  --dur-1: 120ms;
+  --dur-2: 220ms;
+  --dur-3: 180ms;
+  --dur-4: 220ms;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --on-accent: #ffffff;
+  /* Neutral, not lavender. A tinted paper fights the accent colours and makes
+     every white card look slightly off-white; the reference sits its cards on a
+     plain cool grey and that flatness is what reads as expensive. */
+  --bg: #f8faf9;
+  --bg-panel: #ffffff;
+  --bg-raised: #ffffff;
+  --bg-inset: #f5f7f6;
+  --bg-hover: #edf3f0;
+  --bg-active: #e1eae5;
+  --bg-input: #ffffff;
+  /* borders are the separation again — shadow is only a whisper on top of them */
+  --line: #e9eeeb;
+  --line-strong: #d4ddd8;
+  /* a third level that exists only *inside* data grids: at --line's alpha the
+     column rails of a params table read as smudges, and a table whose grid you
+     cannot see reads as a list of loosely aligned text */
+  --line-grid: #e8eeea;
+  --text: #202824;
+  --text-dim: #53615a;
+  /* darkened from #667085 when --sheet dropped: faint text sits directly on the
+     canvas in several places (an error's hint line, a footnote), and the old
+     value measured 4.21:1 against the new ground. The token has to clear AA on
+     the surface it is actually painted on, not on white. */
+  --text-faint: #69766e;
+  /* Two accents with different jobs. Indigo means "press this"; the cool one
+     means "you are here". Indigo is deliberately deeper than the old electric
+     #4c3bd6 — on flat white a saturated blue-violet screams. */
+  --accent: #08645d;
+  --accent-ink: #064f49;
+  --accent-soft: #eaf3ef;
+  --accent-glow: rgba(8,100,93,0.12);
+  --current: #08645d;
+  --current-ink: #08645d;
+  --current-soft: #e7f0eb;
+  /* "you are here" is a tint plus ink, never a large saturated fill */
+  --on-current: #ffffff;
+  --accent-ring: rgba(8,100,93,0.25);
+  --current-ring: rgba(8,100,93,0.25);
+  /* methods and status share one luminance, so chips read as a family, not crayon */
+  --ok: #287047;
+  --ok-ink: #286043;
+  --ok-soft: #edf5ee;
+  --warn: #8b5517;
+  --warn-ink: #805018;
+  --warn-soft: #fcf3e5;
+  --err: #b64145;
+  --err-ink: #a4363b;
+  --err-soft: #fbeef0;
+  /* Elevation is barely there. A card is a white plate with a hairline edge and
+     a 1px contact shadow; only floating things (modals, menus) get real lift. */
+  --elev-1: 0 1px 2px rgba(25,46,34,0.025);
+  --elev-2: 0 6px 24px rgba(25,46,34,0.09), 0 1px 4px rgba(25,46,34,0.04);
+  --elev-3: 0 20px 70px -18px rgba(25,46,34,0.2), 0 2px 8px rgba(25,46,34,0.04);
+  --elev-knob: 0 1px 2px rgba(16, 24, 40, 0.18);
+  --shadow: var(--elev-3);
+  --card-shadow: var(--elev-1);
+  /* the sheet's backdrop. A 34% black veil over an already-dark UI does nothing,
+     so dark needs a much heavier one. */
+  --scrim: rgba(24,37,29,0.22);
+  /* text on a solid danger fill — --on-accent is tuned for the accent, not red */
+  --on-danger: #ffffff;
+  /* search highlight inside response text */
+  --mark: rgba(147, 55, 13, 0.18);
+  /* one luminance band for the whole family — PUT was the outlier at 4.19:1 on the
+     canvas, a blue bright enough to look like a sibling but not deep enough to
+     read as text */
+  --m-get: #287047;
+  --m-post: #87581d;
+  --m-put: #326995;
+  --m-patch: #74518c;
+  --m-delete: #a4363b;
+  --m-other: #667169;
+  --tok-key: #326995;
+  --tok-str: #287047;
+  --tok-bool: #74518c;
+  --tok-num: #87581d;
+  /* chrome that content scrolls under. Opaque, and deliberately the same white a
+     card uses: the reference's structure is white nav + white top bar sitting on a
+     grey canvas, with the hairline doing the separating. A frosted bar instead
+     needs a blur pass per surface and was the largest GPU cost in the app.
+     `--sheet` is that canvas, and it used to be the *window* grey (#f4f5f7), which
+     meant the workspace had no ground of its own: --sheet === --bg, so the seam
+     between the request half and the response half was two identical greys meeting,
+     and the only thing holding a card off the page was a 9% hairline.
+     Three steps now, and each one has a job:
+       --sheet-card  white            the paper a table or payload sits on
+       --band        one step down    a header band inside that paper
+       --sheet       two steps down   the canvas the paper lies on
+     A 1% tint that is too weak to read as a tone and too visible to read as white
+     is what made the header band look dirty. Spacing the steps apart is the fix;
+     another border would only add a frame inside a frame. */
+  --material: #ffffff;
+  --material-thick: #ffffff;
+  --knob: #ffffff;
+  --kbd-bg: #f3f6f4;
+  --sheet: #fafbfa;
+  --band: #f6f8f7;
+  --sheet-card: #ffffff;
+}
+
+:root[data-theme="dark"] {
+  /* Neutral charcoal. Panels are separated by their border and one step of
+     lightness, not by a coloured bloom — a glow that only works in dark is a
+     theme, not a design. */
+  color-scheme: dark;
+  /* dark's accent is a light periwinkle, so ink on it has to go the other way */
+  --on-accent: #15251d;
+  --bg: #131917;
+  --bg-panel: #1a2320;
+  --bg-raised: #24312b;
+  --bg-inset: #151e19;
+  --bg-hover: #2a3730;
+  --bg-active: #35463b;
+  --bg-input: #1a2320;
+  --line: #2d3b31;
+  --line-strong: #435549;
+  --line-grid: #344439;
+  --text: #e8eee9;
+  --text-dim: #b6c4b9;
+  --text-faint: #9aada0;
+  --accent: #87c5b0;
+  --accent-ink: #a8d7c4;
+  --accent-soft: #283d32;
+  --accent-glow: rgba(135,197,176,0.12);
+  --current: #87c5b0;
+  --current-ink: #a8d7c4;
+  --current-soft: #263b30;
+  --on-current: #06211f;
+  --accent-ring: rgba(135, 197, 176, 0.35);
+  --current-ring: rgba(135, 197, 176, 0.35);
+  --ok: #4dd491;
+  --ok-ink: #4dd491;
+  --ok-soft: rgba(77, 212, 145, 0.13);
+  --warn: #f5b942;
+  --warn-ink: #f7c765;
+  --warn-soft: rgba(245, 185, 66, 0.13);
+  --err: #ff7a6e;
+  --err-ink: #ff9389;
+  --err-soft: rgba(255, 122, 110, 0.13);
+  /* In dark, a shadow only says "raised" if it is genuinely black and genuinely
+     wide — so it goes on the floating layers, and cards still lean on the border. */
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --elev-2: 0 8px 32px rgba(0, 0, 0, 0.36);
+  --elev-3: 0 4px 14px rgba(0, 0, 0, 0.5), 0 26px 60px -18px rgba(0, 0, 0, 0.8);
+  --elev-knob: 0 1px 2px rgba(0, 0, 0, 0.55);
+  --shadow: var(--elev-3);
+  --card-shadow: var(--elev-1);
+  /* dark needs a far heavier veil than light for the sheet to read as elevated */
+  --scrim: rgba(0, 0, 0, 0.66);
+  --on-danger: #ffffff;
+  --mark: rgba(245, 193, 73, 0.26);
+  --m-get: #3ddc97;
+  --m-post: #f0b429;
+  --m-put: #58a6ff;
+  --m-patch: #c77dff;
+  --m-delete: #ff8585;
+  --m-other: #a0b1c9;
+  --tok-key: #7cb3ff;
+  --tok-str: #56d69b;
+  --tok-bool: #c77dff;
+  --tok-num: #f0b429;
+  --material: #18211c;
+  --material-thick: #18211c;
+  --knob: #e8eaee;
+  --kbd-bg: #24312b;
+  /* the same three steps, mirrored: here a card is *raised* out of the canvas
+     (lighter = nearer), so --band steps up from the card where light steps down.
+     Reusing --bg-raised's value keeps the ladder to one scale in both themes. */
+  --sheet: #161f1a;
+  --band: #202c24;
+  --sheet-card: #1a2320;
+}
+
+
+
+/* ============================================================ reset */
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+body {
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  color: var(--text);
+  background: var(--bg);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+  text-rendering: optimizeLegibility;
+}
+/* Every surface is opaque and flat. Separation comes from the hairline border
+   and one step of background lightness, so content scrolling under chrome never
+   has to be blurred to stay legible — it just isn't visible there. */
+h1,
+h2,
+h3,
+h4 {
+  letter-spacing: var(--track-display);
+  font-weight: 600;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  -webkit-tap-highlight-color: transparent;
+}
+a {
+  color: var(--accent-ink);
+  text-decoration-color: color-mix(in srgb, var(--accent-ink) 40%, transparent);
+  /* the default underline sits on the descenders and makes small text look
+     clipped; lifting it off the baseline is most of what "typeset" reads as */
+  text-underline-offset: 2px;
+}
+a:hover {
+  text-decoration-color: currentColor;
+}
+svg {
+  flex: none;
+}
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: var(--r-pill);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+::selection {
+  background: var(--accent-soft);
+}
+
+/* ============================================================ shell
+   Rail, sidebar and topbar are one translucent material stacked over the
+   canvas, so content scrolling underneath them softens instead of colliding. */
+.material {
+  background: var(--material);
+}
+.app {
+  display: grid;
+  /* without minmax(0,1fr) an open-ended tabstrip would size the whole app wider
+     than the window and push the response pane off-screen */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 54px 1fr var(--status-h);
+  height: 100vh;
+  zoom: var(--ui-zoom, 1);
+  /* a hairline on all four sides makes the window edge legible against the desktop */
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  /* an presented sheet pushes the whole host back and dims it, the way iOS does */
+  transition: transform var(--dur-4) var(--ease), filter var(--dur-4) var(--ease);
+  will-change: transform;
+}
+body.has-sheet .app {
+  transform: scale(0.955);
+  filter: brightness(0.94) saturate(0.9);
+  border-radius: var(--r-xl);
+  overflow: hidden;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 0 0 var(--s-3);
+  background: var(--material-thick);
+  border-bottom: 1px solid var(--line);
+}
+.topbar .tabstrip {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border-bottom: none;
+  background: transparent;
+  /* sitting on the bar's floor is what lets a tab look connected to its page */
+  align-items: flex-end;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 600;
+  font-size: var(--t-body);
+  letter-spacing: var(--track-tight);
+}
+.brand-mark {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-sm);
+  background: var(--accent);
+  display: grid;
+  place-items: center;
+  color: var(--on-accent);
+}
+.brand-mark svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+.topbar-spacer {
+  flex: 1;
+}
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail) var(--sidebar) 5px minmax(0, 1fr);
+  min-height: 0;
+}
+/* ============================================================ status bar
+   Obsidian keeps the always-true facts about the workspace on one thin line at
+   the bottom: where you are pointed, and what the last response actually said.
+   Every item on it is a shortcut to the surface that owns that thing. */
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: 0 var(--s-3);
+  height: var(--status-h);
+  min-height: var(--status-h);
+  border-top: 1px solid var(--line);
+  /* same material as the topbar, so the two end-bars of the window are one system
+     and content visibly scrolls under both */
+  background: var(--material-thick);
+  font-size: var(--t-cap);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.sb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 6px;
+  border: none;
+  border-radius: var(--r-xs);
+  background: none;
+  font: inherit;
+  line-height: 1;
+  color: var(--text-faint);
+}
+button.sb-item { cursor: pointer; transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease); }
+button.sb-item:hover { background: var(--bg-hover); color: var(--text); }
+.sb-right { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s-1); }
+.sb-value { font-variant-numeric: tabular-nums; color: var(--text-dim); font-weight: var(--w-medium); }
+.sb-sep { width: 1px; height: 12px; background: var(--line-strong); opacity: 0.6; flex: none; }
+.sb-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); flex: none; }
+.sb-ok { color: var(--ok-ink); font-weight: var(--w-medium); }
+.sb-err { color: var(--err-ink); font-weight: var(--w-medium); }
+.sb-dirty { color: var(--warn-ink); }
+.sb-url { overflow: hidden; text-overflow: ellipsis; max-width: 46vw; color: var(--text-faint); }
+/* the sidebar seam is a real control, not dead space: it takes the hairline the
+   sidebar used to draw and widens into a 5px hit area with the same hover cue as
+   the horizontal divider */
+.col-resizer {
+  position: relative;
+  cursor: col-resize;
+  z-index: 2;
+}
+.col-resizer::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--line);
+  transition: background-color var(--dur-1) var(--ease), width var(--dur-1) var(--ease), left var(--dur-1) var(--ease);
+}
+.col-resizer:hover::after,
+.col-resizer.dragging::after {
+  background: var(--accent);
+  width: 2px;
+  left: 1.5px;
+}
+.rail {
+  background: var(--material);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+  padding: var(--s-3) 0;
+}
+.rail-btn {
+  position: relative;
+  width: 40px;
+  height: 38px;
+  border-radius: var(--r-sm);
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+}
+.rail-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.rail-btn.active {
+  background: var(--current-soft);
+  color: var(--current-ink);
+}
+.sidebar {
+  background: var(--material);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* one gutter for the whole column, so the title, the search field and every
+   row pill start on the same line instead of stepping in and out */
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s-5) var(--s-4) var(--s-2);
+  gap: var(--s-2);
+  min-height: 52px;
+}
+/* an iOS large title, not a shouted uppercase label */
+.sidebar-title {
+  font-weight: 700;
+  font-size: var(--t-h1);
+  letter-spacing: var(--track-display);
+  color: var(--text);
+}
+.sidebar-body {
+  flex: 1;
+  overflow: auto;
+  padding: 0 var(--s-4) var(--s-3);
+}
+.workspace {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  /* the canvas. Everything in here is an opaque white plate laid on this tone,
+     so the ground does the separating and a card needs only one hairline. */
+  background: var(--sheet);
+}
+
+.rail-btn svg {
+  width: 17px;
+  height: 17px;
+}
+/* the selected rail item is the app's primary navigation state: give it a bar */
+.rail-btn.active::before {
+  content: '';
+  position: absolute;
+  /* the rail is 52px and the button 40px, so -6px lands this bar flush against
+     the window edge — where the reference puts it, and where it reads as "this
+     column of the app is the live one" rather than as a decoration on a button */
+  left: -10px;
+  top: 50%;
+  width: 4px;
+  height: 24px;
+  margin-top: -12px;
+  border-radius: 0 var(--r-pill) var(--r-pill) 0;
+  background: var(--current);
+  animation: materialize var(--dur-3) var(--ease-spring);
+}
+
+/* ============================================================ tabs
+   A tab bar, not a file explorer: the active tab is a raised pill and the
+   rest recede, so the eye finds position without hunting for an underline. */
+.tabstrip {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: 0 var(--s-2);
+  height: 40px;
+  min-height: 40px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabstrip::-webkit-scrollbar {
+  display: none;
+}
+.tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 var(--s-3);
+  height: 30px;
+  line-height: 1;
+  /* a rounded rectangle, not a capsule: at 30px tall a full pill makes the tab
+     strip look like a row of lozenges. */
+  border-radius: var(--r-sm);
+  color: var(--text-faint);
+  white-space: nowrap;
+  max-width: 230px;
+  width: max-content;
+  min-width: 0;
+  flex-shrink: 0;
+  font-size: var(--t-sub);
+}
+/* unselected neighbours are separated by a hairline rather than a gap, so the
+   strip reads as one row of siblings */
+.tab:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+/* The active tab shares the editing surface's fill. */
+.tab.active {
+  background: var(--sheet);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+/* precision bottom-edge indicator on active tab */
+.tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 20%;
+  right: 20%;
+  height: 2px;
+  border-radius: var(--r-pill);
+  background: var(--current);
+  animation: materialize var(--dur-3) var(--ease-spring);
+}
+/* One hairline in the gap between every neighbouring pair, always painted. It
+   sits inside the 4px gap, so no hover or active fill can cover it — the earlier
+   version hid lines conditionally, so the row looked uneven depending on which
+   tab happened to be open. */
+.tab .label {
+  min-width: 0;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tab > :not(.label) { flex-shrink: 0; }
+.tab .close {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+  font-size: var(--t-glyph);
+  line-height: 1;
+}
+.tab .close:hover {
+  background: var(--line-strong);
+  color: var(--text);
+}
+.tab .dirty {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.tab-new {
+  padding: 0 var(--s-2);
+  height: 34px;
+  border-radius: var(--r) var(--r) 0 0;
+  color: var(--text-faint);
+}
+.tab-new:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+/* pinned to the right edge of the scrolling strip so ＋ and the switcher are
+   reachable no matter how far the tabs have scrolled */
+.tab-actions {
+  position: sticky;
+  right: 0;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: var(--s-1);
+  /* fades into the bar's own colour, not the window canvas: the strip sits on the
+     opaque white top bar since the 2026-09-29 restyle */
+  background: linear-gradient(90deg, transparent, var(--material) 16px);
+  z-index: 1;
+}
+/* the mirror of that fade on the left end, only while something is hidden there */
+.tab-fade-left {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  flex: none;
+  width: 16px;
+  margin-right: -16px;
+  pointer-events: none;
+  display: none;
+  background: linear-gradient(270deg, transparent, var(--material) 16px);
+}
+.tabstrip.fade-left .tab-fade-left {
+  display: block;
+}
+.tab-more {
+  width: 22px;
+  height: 30px;
+  border-radius: var(--r-sm);
+  color: var(--text-faint);
+  font-size: var(--t-cap);
+  display: none;
+  place-items: center;
+}
+.tabstrip.overflowing .tab-more {
+  display: grid;
+}
+.tab-more:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* ============================================================ request pane */
+.pane-scroll {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* transparent, not --sheet: the pane sits directly on the canvas, so nothing
+     slides past the edge of a card when the content scrolls */
+  background: transparent;
+}
+.titlebar {
+  display: flex;
+  align-items: center;
+  padding: var(--s-3) var(--pad-x) var(--s-1);
+  background: transparent;
+}
+.req-title {
+  flex: 0 1 460px;
+  min-width: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 2px 4px;
+  font-size: var(--t-h2);
+  font-weight: 600;
+  letter-spacing: var(--track-tight);
+  color: var(--text);
+}
+.req-title:hover {
+  background: var(--bg-hover);
+}
+.req-title:focus {
+  outline: none;
+  background: var(--bg-panel);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.req-title::placeholder {
+  color: var(--text-faint);
+  font-weight: var(--w-medium);
+}
+/* The request's address, pushed to the right end of the title row. The tab label
+   says *what* this is; this says *where* it lives, which nothing on screen did
+   before. Quiet enough to ignore once you know, and one click from the tree. */
+.req-crumb {
+  margin-left: auto;
+  min-width: 0;
+  max-width: 44%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: var(--r-xs);
+  background: transparent;
+  padding: 3px 6px;
+  font-size: var(--t-cap);
+  color: var(--text-faint);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: background-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.req-crumb > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.req-crumb-sep {
+  opacity: 0.55;
+  flex: none;
+}
+.req-crumb:hover {
+  background: var(--bg-hover);
+  color: var(--text-dim);
+}
+/* the composer reads as one object: method, target and action in a single card */
+.urlbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin: 0 var(--pad-x) var(--s-3);
+}
+/* method, protocol and target are one field; the send cluster sits beside it */
+.url-field {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 var(--s-1);
+  border: 1px solid var(--line-strong);
+  background: var(--bg-panel);
+  border-radius: var(--r);
+  transition: box-shadow var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
+}
+.url-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow), 0 1px 3px var(--accent-glow);
+}
+.url-field:focus-within .method-pick {
+  color: var(--accent-ink);
+}
+.url-field .seg {
+  background: transparent;
+  box-shadow: none;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  padding: 2px 6px 2px 2px;
+  margin-right: 2px;
+  align-self: stretch;
+}
+/* No thumb override here any more. It used to flatten the thumb to --bg-hover so
+   the protocol switch matched the plate, but the thumb is the only thing that
+   says which protocol you are on — grey-on-grey made the active label unreadable,
+   worst in dark where the text also turns dark. */
+.url-field .method-pick {
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  margin-right: 2px;
+  align-self: stretch;
+}
+.url-field .url-input,
+.url-field .select {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  padding-left: var(--s-2);
+}
+.url-field .url-input:focus,
+.url-field .select:focus {
+  box-shadow: none;
+  border-color: transparent;
+}
+/* the toolbar above a code view: a control, a count, a filter */
+.code-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--pad-x);
+  background: var(--bg-inset);
+  flex: none;
+}
+/* the "we only painted part of it" band: same amber pairing the 4xx pill uses, so
+   it is legible without turning a normal response into an alarm */
+.render-note {
+  flex: none;
+  padding: 6px var(--pad-x);
+  border-bottom: 1px solid var(--line);
+  background: var(--warn-soft);
+  color: var(--warn-ink);
+  font-size: var(--t-cap);
+}
+.select,
+.input {
+  height: 28px;
+  line-height: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  padding: 0 10px;
+  color: var(--text);
+  min-width: 0;
+}
+.textarea {
+  background: var(--bg-input);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+  line-height: 1.6;
+  color: var(--text);
+  min-width: 0;
+}
+.select:hover,
+.input:hover {
+  border-color: var(--line-strong);
+}
+.input:focus,
+.select:focus,
+.textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* inside the composer the fields have no chrome of their own — the card is the field */
+
+.select {
+  appearance: none;
+  padding-right: 24px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-faint) 50%),
+    linear-gradient(135deg, var(--text-faint) 50%, transparent 50%);
+  background-position: calc(100% - 13px) 52%, calc(100% - 8px) 52%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.select.sm {
+  height: 24px;
+  padding: 0 22px 0 var(--s-2);
+  font-size: var(--t-sub);
+}
+/* The general listbox that stands in for <select> (see selectField in menu.js).
+   It keeps the .select box — including the drawn chevron and every contextual
+   override — and only changes how the label is laid out, so a borderless field in
+   a row still right-aligns there. */
+.select-field {
+  display: inline-flex;
+  align-items: center;
+}
+.select-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.select-field[disabled] {
+  opacity: 0.45;
+  cursor: default;
+}
+/* A field that lives inside a table cell: no box of its own, but it keeps the
+   drawn chevron, because a bare word does not read as something you can open.
+   Longhands only — the background shorthand would erase the arrow. */
+.select.bare {
+  width: 100%;
+  border-color: transparent;
+  background-color: transparent;
+  padding-left: 0;
+}
+.select.bare:hover {
+  background-color: var(--bg-hover);
+}
+.method {
+  font-weight: 700;
+  font-family: var(--font-mono);
+  min-width: 92px;
+  letter-spacing: -0.01em;
+}
+/* the method picker is a menu trigger, not a native select: the popup has to
+   carry the theme, and the OS one cannot */
+.method-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  min-width: 86px;
+  height: 34px;
+  padding: 0 7px 0 9px;
+  line-height: 1;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.method-pick:hover {
+  background: var(--bg-hover);
+}
+.method-pick svg {
+  width: 13px;
+  height: 13px;
+  color: var(--text-faint);
+  transition: transform var(--dur-2) var(--ease-spring);
+}
+.url-input {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--t-sub);
+}
+/* a URL longer than the field wraps instead of hiding its tail off-screen:
+   the query is half of what the user is debugging, so it stays visible. The
+   height is driven from JS (scrollHeight), capped at three lines. */
+textarea.url-input {
+  resize: none;
+  overflow: hidden;
+  height: auto;
+  min-height: 36px;
+  max-height: 104px;
+  padding: 9px 8px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+/* the verb cluster and the send button keep a constant width across protocols
+   and verbs, so switching HTTP/SSE/WS never moves a single edge */
+.urlbar > .btn {
+  min-width: 88px;
+  justify-content: center;
+}
+.urlbar > .btn.primary,
+.urlbar > .btn.danger {
+  min-width: 96px;
+}
+.url-input::placeholder {
+  color: var(--text-faint);
+  font-family: var(--font-ui);
+}
+
+/* ============================================================ buttons
+   iOS: no borders, a filled shape, and the highlight is the fill going down. */
+/* CJK sits low in a loose line box, so every boxed control gets a fixed height,
+   flex centring and a tight leading — that is what puts the glyphs on the middle
+   of the border instead of somewhere near it */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 var(--s-4);
+  line-height: 1;
+  /* a quiet rounded rectangle with a hairline edge — the same shape the reference
+     uses for "Monthly ▾" and "View Calendar". A capsule button on a dense tool
+     reads as a marketing page; a pill is for chips, not for commands. */
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-weight: 600;
+  font-size: var(--t-sub);
+  white-space: nowrap;
+}
+.btn:hover {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--line-strong) 60%, var(--text-faint));
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+/* Primary actions use a solid fill. Hover changes the fill; keyboard focus
+   uses an outline. Keep decorative glow out of the editing workspace. */
+.btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--on-accent);
+  box-shadow: none;
+}
+.btn.primary:hover {
+  background: var(--accent-ink);
+  border-color: transparent;
+  box-shadow: none;
+}
+/* emerald is the "nothing to do here" state, never a call to action */
+.btn.success {
+  background: var(--ok-soft);
+  color: var(--ok-ink);
+  border-color: color-mix(in srgb, var(--ok) 26%, transparent);
+}
+.btn.success:hover {
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 34%, transparent);
+  color: var(--ok-ink);
+}
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--text-dim);
+}
+.btn.ghost:hover {
+  background: var(--bg-hover);
+  border-color: transparent;
+  color: var(--text);
+}
+.btn.danger {
+  color: var(--err-ink);
+  border-color: color-mix(in srgb, var(--err) 30%, transparent);
+}
+.btn.sm {
+  height: 22px;
+  padding: 0 var(--s-2);
+  font-size: var(--t-sub);
+  border-radius: var(--r-xs);
+}
+.btn.icon {
+  padding: 0 8px;
+}
+.btn svg {
+  width: 13px;
+  height: 13px;
+}
+.btn-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+/* ============================================================ sub tabs
+   A pill group on an inset track — the same object as the segmented control,
+   so every "pick one of these" affordance in the app looks alike. */
+.subtabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 var(--pad-x);
+  background: transparent;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.subtab {
+  position: relative;
+  height: 34px;
+  padding: 0 11px;
+  line-height: 1;
+  color: var(--text-faint);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* the rule grows into place rather than appearing — the one place a sliding
+   indicator would be honest about which tab you just left */
+.subtab::after {
+  content: '';
+  position: absolute;
+  /* inset to the label, not edge to edge — a full-width rule under a short word
+     reads as a column border, a short one reads as "this tab" */
+  left: 11px;
+  right: 11px;
+  bottom: -1px;
+  height: 3px;
+  border-radius: var(--r-pill);
+  background: var(--current);
+  opacity: 0;
+  transform: scaleX(0.55);
+  transition: transform var(--dur-3) var(--ease-spring), opacity var(--dur-2) var(--ease);
+}
+.subtab:hover {
+  color: var(--text);
+}
+.subtab.on {
+  color: var(--text);
+  font-weight: 600;
+}
+.subtab.on::after {
+  opacity: 1;
+  transform: scaleX(1);
+}
+.count {
+  font-size: var(--t-cap);
+  padding: 1px 5px;
+  border-radius: var(--r-pill);
+  background: var(--bg-active);
+  color: var(--text-dim);
+}
+.subtab.on .count {
+  /* the underline on this tab is already the "you are here" colour, so the
+     count beside it has to agree or one row speaks two accent languages */
+  background: var(--current-soft);
+  color: var(--current-ink);
+}
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-4) var(--pad-x) var(--s-6);
+}
+/* A request half that only holds a three-row table used to leave 140px of bare
+   canvas under the card, and the screen read as unfinished. Let the paper take
+   the half: the emptiness becomes blank page inside a framed object instead of
+   nothing outside one. flex-grow only — the shrink:0 guard below is what keeps a
+   clipped card from eating its own rows. */
+#request-host .pane {
+  flex-grow: 1;
+}
+#request-host .pane > .kv:first-of-type,
+#request-host .pane > .group:first-of-type {
+  flex-grow: 1;
+}
+
+/* ============================================================ kv editor
+   A grouped list, not a spreadsheet: one card, inset separators, 40px rows. */
+.kv-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  height: 34px;
+  padding: 0 var(--s-2) 0 var(--pad-x);
+  border-bottom: 1px solid var(--line);
+}
+/* A borderless label on a white header strip is indistinguishable from a caption,
+   which is what made 批量编辑 read as stray text. Controls in this row keep their
+   hairline; the row is the card's chrome, not a place for quiet text. */
+.kv-bar .btn.ghost {
+  border-color: var(--line);
+}
+.kv-bar .btn.ghost:hover {
+  border-color: var(--line-strong);
+  background: var(--bg-panel);
+  color: var(--text);
+}
+.kv-title {
+  font-size: var(--t-body);
+  font-weight: 600;
+  letter-spacing: var(--track-tight);
+  color: var(--text);
+}
+.kv {
+  display: flex;
+  flex-direction: column;
+  /* same box as .group and .editor: one radius, one whisper border, one shadow.
+     Three radii for one concept is the kind of drift you only notice when a
+     params card sits beside a body card on the same screen. */
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: var(--sheet-card);
+  box-shadow: var(--card-shadow);
+}
+.kv-rows {
+  display: flex;
+  flex-direction: column;
+}
+.kv-row {
+  position: relative;
+  display: grid;
+  align-items: center;
+  min-height: var(--row-h);
+}
+/* separators start where the content does, so the card edge stays unbroken */
+.kv-row::after {
+  content: '';
+  position: absolute;
+  left: var(--pad-x);
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--line-grid);
+}
+.kv-row:last-child::after {
+  display: none;
+}
+.kv-row:hover {
+  background: var(--bg-inset);
+}
+/* the row being edited owns the left edge, so the eye can follow the caret */
+.kv-row:focus-within {
+  background: var(--bg-panel);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.kv-head {
+  min-height: 30px;
+  /* a header band on its own tone: the card is paper, the band is one step of
+     ink on that paper, and the firm rule below closes it off. It used to borrow
+     --bg-inset, a 1% tint that read as dirty rather than as deliberate. */
+  background: var(--band);
+}
+.kv-head .kv-cell {
+  padding-top: var(--s-2);
+  padding-bottom: var(--s-2);
+  /* the column names are a legend, not a first data row: lighter ink, firmer
+     weight, and a hair of tracking so a CJK label (which has no upper case to
+     fall back on) still reads as set-apart rather than as small body text */
+  color: var(--text-faint);
+  font-weight: var(--w-strong);
+  letter-spacing: 0.02em;
+}
+.kv-head::after {
+  left: 0;
+  background: var(--line-strong);
+}
+.kv-head:hover {
+  background: var(--band);
+}
+/* The table's own footnote: inside the frame, under a hairline, immediately after
+   the last row. It used to be a <p> loose under the card, which was fine while the
+   card hugged its content and wrong as soon as the card fills the half — the note
+   slid to the bottom of the pane, further from its rows than the header is. */
+.kv-foot {
+  padding: var(--s-3) var(--pad-x);
+  border-top: 1px solid var(--line);
+  /* pinned to the foot of the sheet. When the card grows to fill the half, a note
+     sitting directly under the last row leaves an ambiguous blank below it — is
+     that the card, or the page? At the bottom edge it is unambiguously a footnote,
+     and the space above it is unambiguously room for more rows. No effect when
+     the table is tall enough to fill the card anyway. */
+  margin-top: auto;
+  font-size: var(--t-cap);
+  color: var(--text-faint);
+  line-height: 1.6;
+}
+.kv-cell {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 var(--s-2) 0 var(--pad-x);
+  font-size: var(--t-sub);
+  color: var(--text-faint);
+}
+.kv-cell-check {
+  padding: 0;
+  justify-content: center;
+}
+.kv-cell-last {
+  padding: 0 var(--s-2) 0 0;
+  justify-content: flex-end;
+}
+/* vertical rails between the columns: a table reads as a grid, not as a list of
+   rows, only when the columns are visible too */
+.kv-row > .kv-cell + .kv-cell {
+  border-left: 1px solid var(--line-grid);
+}
+.kv-row > .kv-cell-check + .kv-cell {
+  border-left: none;
+}
+.kv-row:not(.kv-head) > .kv-cell:not(.kv-cell-check):not(.kv-cell-last) {
+  color: var(--text);
+}
+.kv-cell input,
+.kv-cell select {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 10px 0;
+  font-size: var(--t-body);
+}
+.kv-cell input:focus,
+.kv-cell select:focus {
+  outline: none;
+  box-shadow: none;
+}
+.kv-cell input.mono {
+  font-family: var(--font-mono);
+  font-size: var(--t-mono);
+}
+/* A long or multi-line value expands the same cell instead of opening a dialog.
+   The textarea stays borderless and transparent like the input it replaces, so
+   expanding reads as the row growing rather than a box appearing inside it. */
+.kv-cell textarea.kv-value {
+  width: 100%;
+  min-height: 64px;
+  border: none;
+  background: transparent;
+  padding: 8px 0 10px;
+  font-family: var(--font-mono);
+  font-size: var(--t-mono);
+  line-height: 1.55;
+  color: var(--text);
+  resize: vertical;
+}
+.kv-cell textarea.kv-value:focus {
+  outline: none;
+}
+.kv-row.wrapped {
+  align-items: start;
+}
+.kv-row.wrapped > .kv-cell {
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+.kv-wrap {
+  flex: none;
+  margin-left: 6px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--t-cap);
+  cursor: pointer;
+}
+.kv-wrap:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.kv-cell .kv-desc {
+  color: var(--text-faint);
+  font-size: var(--t-sub);
+}
+/* A file row holds a path the engine reads at send time, so the picker belongs
+   in the row itself — an accent-tinted chip so it never competes with 发送. */
+.kv-cell:has(.kv-pick) input {
+  width: auto;
+  flex: 1;
+  min-width: 0;
+  padding-right: var(--s-2);
+  /* an absolute path never fits; cut it with an ellipsis so a long one reads as
+     truncated rather than as a rendering glitch */
+  text-overflow: ellipsis;
+}
+.btn.kv-pick {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 9px;
+  font-size: var(--t-cap);
+  font-weight: 600;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  box-shadow: none;
+}
+.btn.kv-pick:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-ink);
+  box-shadow: none;
+}
+/* what the path points at: a tabular size, or a red lie when it points at nothing */
+.kv-file-meta {
+  flex: 0 0 auto;
+  padding-left: 6px;
+  font-size: var(--t-cap);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.kv-file-meta.bad {
+  color: var(--err-ink);
+}
+.kv .check {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  display: block;
+}
+.kv-plus {
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  /* a filled 1%-off-grey disc next to white paper reads as a smudge; a ring reads
+     as an affordance, and it is the same hairline weight as everything else */
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--t-glyph);
+  line-height: 1;
+  /* the plus glyph sits optically high in a circle; nudge it down */
+  padding-bottom: 2px;
+  transition: background-color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease), transform var(--dur-2) var(--ease-spring);
+}
+.kv-row.ghost:hover {
+  background: var(--accent-soft);
+}
+.kv-row.ghost:hover .kv-plus {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  transform: scale(1.12);
+}
+/* an empty table reads as a broken box; say what goes in it */
+.kv:not(:has(.kv-row:not(.kv-head):not(.ghost))) .kv-row.ghost::after {
+  display: none;
+}
+.kv-row.ghost input::placeholder {
+  color: var(--text-faint);
+}
+.kv-del {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+  opacity: 0;
+}
+.kv-del svg {
+  width: 11px;
+  height: 11px;
+}
+.kv-row:hover .kv-del {
+  opacity: 1;
+}
+.kv-del:hover {
+  background: color-mix(in srgb, var(--err) 14%, transparent);
+  color: var(--err-ink);
+}
+.off input,
+.off select {
+  color: var(--text-faint);
+  text-decoration: line-through;
+  text-decoration-color: var(--line-strong);
+}
+.hint {
+  color: var(--text-faint);
+  font-size: var(--t-sub);
+  line-height: 1.6;
+}
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field > label {
+  font-size: var(--t-sub);
+  color: var(--text-faint);
+  font-weight: var(--w-medium);
+}
+.inline {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+/* binary body: one field, one picker, one reading of what was picked */
+.file-pick {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.file-pick > input {
+  flex: 1;
+  min-width: 0;
+}
+.file-pick > .kv-file-meta {
+  padding-left: 0;
+}
+/* the real control behind a filePicker row: still clickable programmatically,
+   never painted */
+.file-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* ============================================================ iOS controls
+   Grouped lists, segmented controls, switches. Anything that asks the user to
+   choose is one of these; there is no fifth way to say "pick". */
+.group {
+  background: var(--sheet-card);
+  /* the shadow is the boundary now, so the stroke drops to a whisper — keeping
+     both at full strength is what makes a bordered card under a drop shadow read
+     as two overlapping attempts at the same job */
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+}
+/* titles and footnotes take their gutter from the container they sit in, so a
+   caption lines up with the card above it whether it is inside a pane or a modal */
+.group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  height: 36px;
+  padding: 0 var(--pad-x);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--t-body);
+  font-weight: 600;
+  letter-spacing: var(--track-tight);
+  color: var(--text);
+}
+.group-head + .row::before,
+.group-head + .body-extras {
+  display: none;
+}
+/* The padded interior of a card whose children are ordinary form controls rather
+   than `.row`s. Without it, wrapping a form in `.group` leaves the fields flush
+   against the rounded edge — which is why Auth and per-request Settings were
+   left sitting on the bare sheet in the first place. */
+.group-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding: var(--s-4) var(--pad-x) var(--s-5);
+}
+.group-body .divider-h {
+  margin: 0;
+}
+.group-foot {
+  padding: 6px 0 0;
+  font-size: var(--t-cap);
+  color: var(--text-faint);
+  line-height: 1.55;
+}
+.group > .group-foot,
+.group > .body-extras:not(:empty) {
+  padding: 6px var(--pad-x) 0;
+}
+.group > .body-extras:not(:empty) {
+  padding: 0 var(--pad-x);
+  border-top: 1px solid var(--line);
+}
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 42px;
+  padding: 6px var(--pad-x);
+}
+.row + .row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: var(--line);
+}
+.row-label {
+  flex: none;
+  max-width: 44%;
+  color: var(--text);
+}
+.row-value {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  color: var(--text-dim);
+  text-align: right;
+}
+.row-detail {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--t-cap);
+  font-weight: 400;
+  color: var(--text-faint);
+  letter-spacing: 0;
+  line-height: 1.45;
+}
+.row .input,
+.row .select,
+.row-value > .input,
+.row-value > .select {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  padding-left: 0;
+  text-align: right;
+}
+.row-value > .select {
+  padding-right: 20px;
+  background-position: calc(100% - 10px) 52%, calc(100% - 5px) 52%;
+}
+.row .input:focus,
+.row .select:focus {
+  box-shadow: none;
+  border-color: transparent;
+}
+.row-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: var(--s-3) var(--pad-x);
+}
+.row-stack .input,
+.row-stack .textarea {
+  background: var(--bg-inset);
+  border-color: transparent;
+}
+.disclosure {
+  flex: none;
+  color: var(--text-faint);
+  display: grid;
+  place-items: center;
+}
+.disclosure svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* segmented control: one thumb that travels between the options */
+.seg {
+  position: relative;
+  display: flex;
+  padding: 3px;
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  flex: none;
+}
+.seg-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  bottom: 3px;
+  width: calc((100% - 6px) / var(--seg-n));
+  border-radius: var(--r-sm);
+  /* a white card sliding along a grey track — the reference's own segmented
+     control. The previous coral fill turned every two-option choice into the
+     loudest object on the screen. */
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--elev-1);
+  transform: translateX(calc(var(--seg-i) * 100%));
+  transition: transform var(--dur-3) var(--ease-spring), width var(--dur-3) var(--ease-spring);
+}
+.seg button {
+  position: relative;
+  z-index: 1;
+  /* without min-width a long label refuses to shrink and the segments stop being equal */
+  flex: 1 1 0;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 13px;
+  line-height: 1;
+  border-radius: var(--r-sm);
+  font-size: var(--t-sub);
+  font-weight: var(--w-medium);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.seg button:hover {
+  color: var(--text);
+}
+.seg button.on {
+  /* the thumb under it is now white, so white ink would vanish */
+  color: var(--text);
+  font-weight: 600;
+}
+/* The sliding pill is already the boundary between "this" and "not this", so
+   hairlines between segments would only ever fight it — which line disappears
+   depends on where the thumb happens to sit. No dividers, no ambiguity. */
+.seg.grow {
+  flex: 1;
+  min-width: 0;
+  /* capped: grown means "take the row", but a row is a whole card width, and a
+     thumb 400px wide stops reading as "this option" and starts reading as
+     a banner. The reference's chips stay chip-sized however wide the row is. */
+  max-width: 520px;
+}
+/* four options across a row is too tight — a wide control takes its own line */
+.row.seg-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--s-2);
+  padding-bottom: 10px;
+}
+.row.seg-row > .row-label {
+  max-width: none;
+}
+
+/* switch: the iOS shape at 43x26, sized to sit on a 44px row */
+.switch {
+  position: relative;
+  flex: none;
+  width: 43px;
+  height: 26px;
+  border-radius: var(--r-pill);
+  background: var(--bg-active);
+  box-shadow: inset 0 0 0 1px var(--line);
+  transition: background-color var(--dur-3) var(--ease);
+}
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--knob);
+  box-shadow: var(--elev-knob);
+  transition: transform var(--dur-3) var(--ease-spring), width var(--dur-2) var(--ease);
+}
+.switch.on {
+  background: var(--ok);
+  box-shadow: none;
+}
+.switch.on::after {
+  transform: translateX(17px);
+}
+.switch:active::after {
+  width: 26px;
+}
+.switch.on:active::after {
+  transform: translateX(13px);
+}
+input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+
+/* ============================================================ code editor */
+.editor {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--bg-inset);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+}
+.editor textarea {
+  display: block;
+  width: 100%;
+  min-height: 180px;
+  padding: 10px 12px;
+  border: none;
+  resize: vertical;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: var(--t-sub);
+  line-height: 1.65;
+  tab-size: 2;
+}
+.editor textarea:focus {
+  outline: none;
+}
+.editor-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 5px var(--s-2);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+}
+pre.code {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: var(--t-sub);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 100%;
+  overflow: auto;
+}
+
+/* ============================================================ response
+   The result is an object too: one card, its own header, nothing flush to an edge. */
+.split {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.divider {
+  /* a 5px painted bar reads as a dirty seam; keep the hit area but draw only a
+     hairline, and let a grip fade in when the pointer finds it */
+  position: relative;
+  height: 13px;
+  background: transparent;
+  cursor: row-resize;
+  flex: none;
+  z-index: 2;
+}
+.divider::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 6px;
+  height: 1px;
+  /* the seam between the two halves is the one line that says "these are two
+     different jobs", so it is the strongest hairline in the app. At --line it
+     vanished into the canvas when canvas and page were the same grey. */
+  background: var(--line-strong);
+  transition: background-color var(--dur-1) var(--ease), height var(--dur-1) var(--ease), top var(--dur-1) var(--ease);
+}
+.divider::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  width: 46px;
+  height: 7px;
+  margin-left: -23px;
+  border-radius: var(--r-pill);
+  background: var(--line-strong);
+  opacity: 0;
+  transition: opacity var(--dur-2) var(--ease), background-color var(--dur-1) var(--ease);
+}
+.divider:hover::after,
+.divider.dragging::after {
+  background: var(--accent);
+  height: 2px;
+  top: 5.5px;
+}
+.divider:hover::before,
+.divider.dragging::before {
+  opacity: 1;
+  background: var(--accent);
+}
+.response {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  min-height: 200px;
+  background: transparent;
+  overflow: hidden;
+}
+/* The other half of the same problem. Filling the pane made it worse in a new
+   way: a 570px white plate holding three centered lines is a void with a border
+   on it. Bounded and centred, the same object reads as placed. `margin: auto` on
+   a column-flex child is what buys the vertical centring without a height. */
+.response > .empty {
+  flex: none;
+  height: auto;
+  width: min(480px, calc(100% - var(--pad-x) * 2));
+  /* auto on all four: margin-block:auto is what centres a column-flex child
+     vertically without giving it a height, and margin-inline:auto centres it —
+     a bounded card pinned to the left edge just moves the emptiness to the
+     other side */
+  margin: auto;
+  padding: var(--s-8) var(--s-6);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--sheet-card);
+  box-shadow: var(--card-shadow);
+}
+/* the pending target, set in mono with the verb in its own colour — the same
+   language the sidebar rows and the status bar use, so a request looks like a
+   request wherever it appears */
+.empty-target {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  min-width: 0;
+  max-width: 100%;
+  margin-top: var(--s-1);
+  padding: 7px var(--s-3);
+  /* no border: this sits inside a framed card, and a second hairline would be a
+     frame inside a frame. --band is the same step the table header uses, so the
+     chip reads as inset material rather than as a 1% smudge on white */
+  border-radius: var(--r-sm);
+  background: var(--band);
+  font-family: var(--font-mono);
+  font-size: var(--t-mono);
+}
+.empty-target code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.empty-target > span {
+  flex: none;
+  font-weight: var(--w-strong);
+  font-size: var(--t-cap);
+  letter-spacing: 0.02em;
+}
+.response-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: var(--s-2) var(--pad-x);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  font-weight: 600;
+  font-size: var(--t-sub);
+}
+.pill.ok {
+  color: var(--ok-ink);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.pill.warn {
+  /* the fill colour is too light to write 12px text with on a tinted pill —
+     it measured 4.36:1, so this takes the ink variant like ok and err already do */
+  color: var(--warn-ink);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.pill.err {
+  color: var(--err-ink);
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+}
+.meta {
+  color: var(--text-dim);
+  font-size: var(--t-sub);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.meta b {
+  color: var(--text);
+  font-weight: 600;
+}
+.response-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  /* the payload is content, and in this language content sits on a white plate
+     with a hairline — it used to sit on the canvas because the canvas had the
+     ambient light in it, and now it doesn't */
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--s-3) var(--s-4);
+  box-shadow: var(--card-shadow);
+}
+/* an empty state is a screen, not a caption: title, then one line of intent */
+.empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  height: 100%;
+  gap: var(--s-2);
+  text-align: center;
+  padding: var(--s-8);
+}
+.empty h3 {
+  margin: 0;
+  font-size: var(--t-h3);
+  font-weight: 600;
+  letter-spacing: var(--track-tight);
+  color: var(--text-dim);
+}
+.empty p {
+  margin: 0;
+  font-size: var(--t-sub);
+  color: var(--text-faint);
+  max-width: 380px;
+  line-height: 1.7;
+}
+.method-get {
+  color: var(--m-get);
+}
+.method-post {
+  color: var(--m-post);
+}
+.method-put {
+  color: var(--m-put);
+}
+.method-patch {
+  color: var(--m-patch);
+}
+.method-delete {
+  color: var(--m-delete);
+}
+.method-head,
+.method-options {
+  color: var(--m-other);
+}
+
+/* ============================================================ tree
+   Sidebar rows are list items: roomy, rounded, and the selected one is filled. */
+.node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 8px;
+  line-height: 1.2;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--t-body);
+}
+.node svg {
+  width: 13px;
+  height: 13px;
+  color: var(--text-faint);
+  flex: none;
+}
+.node:hover {
+  background: var(--bg-hover);
+}
+.node.selected {
+  background: var(--current-soft);
+  color: var(--current-ink);
+  box-shadow: inset 3px 0 0 var(--current);
+}
+.node.selected svg {
+  color: var(--current-ink);
+}
+/* An import you cannot see never happened. Rows that just landed announce
+   themselves once with an accent edge, then hand styling back to the tree. */
+.node.just-added {
+  animation: landed 1.7s var(--ease);
+}
+@keyframes landed {
+  0%,
+  55% {
+    background: var(--accent-soft);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  100% {
+    background: transparent;
+    box-shadow: inset 2px 0 0 transparent; /* debt-allow: the resting end of the landed flash, it must animate to nothing */
+  }
+}
+/* Multi-select: the row grows a check disc on its left, in the slot the twist
+   arrow already owns visually. Only painted while actually picking, so a normal
+   browsing sidebar keeps its single-column rhythm. */
+.node.picked {
+  background: var(--accent-soft);
+}
+.node.picked .name {
+  color: var(--accent-ink);
+}
+/* Drag-to-reorder. The insertion mark reuses the sub-tab underline language —
+   same inset, same 3px pill, same "you are here" colour — so a drop target
+   is recognisable without inventing a second indicator vocabulary. */
+.node.drop-before,
+.node.drop-after {
+  position: relative;
+}
+.node.drop-before::before,
+.node.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 11px;
+  right: 11px;
+  height: 3px;
+  border-radius: var(--r-pill);
+  background: var(--current);
+}
+.node.drop-before::before {
+  top: -2px;
+}
+.node.drop-after::after {
+  bottom: -2px;
+}
+.sidebar-body.tree-dragging .node {
+  /* while a row is in flight the rest of the tree is scenery; letting the
+     would-be targets fade keeps the moving one and its mark the only story */
+  color: var(--text-dim);
+}
+/* the row being held lifts off the list — without it the gesture gives back
+   nothing between press and drop, which reads as "this cannot be dragged" */
+.node.dragging-src {
+  background: var(--bg-panel);
+  box-shadow: var(--elev-2), inset 0 0 0 1px var(--line);
+  color: var(--text);
+}
+.tree-dragging .node:hover {
+  background: var(--bg-hover);
+}
+/* the only hint that a row can be picked up at all — without it a drag looks
+   like a feature nobody told you about, and a failed drag looks like a bug */
+.node[draggable='true'] {
+  cursor: grab;
+}
+.tree-dragging .node[draggable='true'] {
+  cursor: grabbing;
+}
+.pick-box {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--line-strong);
+  background: var(--bg-panel);
+  color: transparent;
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
+}
+.pick-box:hover {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.pick-box.on {
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  color: var(--on-accent);
+}
+.pick-box svg {
+  width: 10px;
+  height: 10px;
+  color: inherit;
+}
+/* a toast that can undo something is a control, so it gets a control's affordance */
+.toast-act {
+  margin-left: 10px;
+  padding: 0 8px;
+  height: 22px;
+  border-radius: var(--r-sm);
+  border: 0;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  color: inherit;
+  font: inherit;
+  font-size: var(--t-cap);
+  cursor: pointer;
+}
+.toast-act:hover {
+  background: var(--bg-hover);
+}
+.node .twist svg {
+  width: 9px;
+  height: 9px;
+}
+.node .twist {
+  width: 13px;
+  color: var(--text-faint);
+  font-size: 9px; /* debt-allow: the disclosure triangle is geometry, matches the 9px svg box */
+  flex: none;
+  transition: transform var(--dur-2) var(--ease);
+  transform-origin: 40% 50%;
+}
+.node.open > .twist {
+  transform: rotate(90deg);
+}
+.node .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.node-rename {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-xs);
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: inherit;
+  font-family: inherit;
+  padding: 1px 5px;
+}
+.node-rename:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.node .badge {
+  font-family: var(--font-mono);
+  font-size: var(--t-cap);
+  font-weight: 700;
+  /* a fixed column, not a minimum: min-width let POST overflow 30px while GET and
+     WS filled it exactly, so the names down the tree started at three different
+     x positions and the column read as ragged. 40px is the widest verb the row
+     can show (DELETE, capped at 6 characters by the tree). */
+  width: 40px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* a tinted tile rather than loose coloured text: the reference marks every
+     category with a small coloured plate, and it makes a scannable column out of
+     what used to be eight different word widths */
+  border-radius: var(--r-xs);
+  background: color-mix(in srgb, currentColor 13%, transparent);
+  flex: none;
+}
+.node-actions {
+  display: none;
+  gap: 2px;
+}
+.node:hover .node-actions {
+  display: flex;
+}
+.node-actions button {
+  color: var(--text-faint);
+  padding: 1px var(--s-1);
+  border-radius: var(--r-xs);
+  font-size: var(--t-sub);
+  line-height: 1.2;
+}
+.node-actions button:hover {
+  background: var(--line-strong);
+  color: var(--text);
+}
+/* collections read as section headers, requests as items under them */
+.node-collection .name {
+  font-weight: 600;
+  color: var(--text);
+}
+.node-collection > svg {
+  width: 12px;
+  height: 12px;
+}
+.node-folder > svg {
+  width: 12px;
+  height: 12px;
+}
+.node-request .name {
+  color: var(--text-dim);
+}
+.node-request:hover .name {
+  color: var(--text);
+}
+.tree-pad-1 {
+  padding-left: 15px;
+}
+.tree-pad-2 {
+  padding-left: 27px;
+}
+.tree-pad-3 {
+  padding-left: 39px;
+}
+.search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.search input {
+  width: 100%;
+  padding-left: 26px;
+}
+.search::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-top: -7px;
+  border: 1.5px solid var(--text-faint);
+  border-radius: 50%;
+}
+
+/* ============================================================ event stream */
+.events {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--s-3) var(--pad-x);
+  overflow: auto;
+  /* the stream owns the leftover height, so an empty stream centres its message
+     in the space instead of leaving a paragraph stranded in the top-left */
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.events > .empty {
+  flex: 1;
+}
+.event {
+  /* `.events` is a flex column and a card with overflow:hidden has no automatic
+     min-height to stop it shrinking — with 80 frames in the list every card was
+     being squashed to a few pixels, which is both why the stream looked empty and
+     why it never scrolled */
+  flex: none;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+  background: var(--sheet-card);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+}
+.event-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 4px 10px;
+  font-size: var(--t-sub);
+  color: var(--text-dim);
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--line);
+}
+.tag {
+  font-family: var(--font-mono);
+  font-size: var(--t-cap);
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  letter-spacing: 0.1px;
+}
+.tag.msg {
+  background: color-mix(in srgb, var(--ok) 13%, transparent);
+  color: var(--ok-ink);
+}
+.tag.err {
+  background: color-mix(in srgb, var(--err) 13%, transparent);
+  color: var(--err-ink);
+}
+.tag.meta {
+  background: var(--bg-active);
+  color: var(--text-dim);
+}
+.tag.out {
+  background: color-mix(in srgb, var(--m-patch) 14%, transparent);
+  color: var(--m-patch);
+}
+.event pre {
+  margin: 0;
+  padding: var(--s-2) 10px;
+  font-family: var(--font-mono);
+  font-size: var(--t-sub);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  flex: none;
+}
+.status-dot.live {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent);
+  animation: pulse 1.6s var(--ease) infinite;
+}
+.status-dot.err {
+  background: var(--err);
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.ws-out {
+  margin: 0 var(--pad-x) var(--s-3);
+}
+.ws-send {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--pad-x);
+}
+.ws-send textarea {
+  width: 100%;
+  min-height: 54px;
+  resize: vertical;
+}
+.ws-send-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+/* when there is nothing to warn about the send verb still keeps the right edge */
+.ws-send-row > .btn {
+  margin-left: auto;
+}
+/* a binary body is a file, not an absence of text: identity row, then the bytes */
+.binary-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin: var(--s-3) var(--pad-x);
+}
+/* inside the response card it is a section of that card, not a card of its own —
+   a border inside a border is the one thing this layout never does */
+.response-body .binary-card {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.binary-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--pad-x);
+  border-bottom: 1px solid var(--line);
+}
+.binary-glyph {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.binary-glyph svg {
+  width: 20px;
+  height: 20px;
+}
+.binary-dump {
+  overflow: auto;
+  max-height: 340px;
+  background: var(--bg-inset);
+}
+.binary-dump .code {
+  margin: 0;
+  padding: var(--s-3) var(--pad-x);
+  font-size: var(--t-mono);
+  line-height: 1.55;
+}
+
+/* ============================================================ tables */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-body);
+}
+.table th {
+  text-align: left;
+  color: var(--text-dim);
+  font-size: var(--t-cap);
+  letter-spacing: 0.2px;
+  font-weight: var(--w-strong);
+  padding: var(--s-2) 10px;
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--bg-inset);
+  position: sticky;
+  top: 0;
+  background: var(--sheet-card);
+  z-index: 1;
+}
+.table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line-grid);
+  font-family: var(--font-mono);
+  font-size: var(--t-sub);
+  word-break: break-all;
+}
+.table tbody tr {
+  transition: background-color var(--dur-1) var(--ease);
+}
+.table tbody tr:hover {
+  background: var(--bg-inset);
+  cursor: pointer;
+}
+.mono {
+  font-family: var(--font-mono);
+}
+/* a key, not a label: hairline box, a darker bottom edge, mono caps */
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: var(--r-xs);
+  background: var(--kbd-bg);
+  box-shadow: inset 0 0 0 1px var(--line-strong), inset 0 -2px 0 var(--bg-active);
+  font-family: var(--font-mono);
+  font-size: var(--t-cap);
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: 0;
+}
+
+/* ============================================================ modal
+   An iOS form sheet: the host behind it scales back and dims, the sheet rises. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  display: grid;
+  place-items: center;
+  z-index: 50;
+  animation: veil-in var(--dur-4) var(--ease);
+}
+.overlay.closing {
+  animation: veil-out var(--dur-3) var(--ease-in) both;
+}
+.modal {
+  width: min(860px, 92vw);
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--sheet);
+  border: none;
+  border-radius: var(--r-xl);
+  box-shadow: var(--elev-3);
+  overflow: hidden;
+  animation: present var(--dur-4) var(--ease);
+}
+.overlay.closing .modal {
+  animation: dismiss var(--dur-3) var(--ease-in) both;
+}
+/* A drawer is the same "a layer arrives over the app" verb, but it belongs to an
+   edge, so it comes off that edge rather than rising out of the middle. */
+.overlay:has(.modal-right) {
+  place-items: stretch end;
+}
+.modal-right {
+  width: min(400px, 92vw);
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  border-left: 1px solid var(--line-strong);
+  box-shadow: var(--elev-3);
+  animation: drawer-in var(--dur-4) var(--ease);
+}
+.overlay.closing .modal-right {
+  animation: drawer-out var(--dur-3) var(--ease-in) both;
+}
+@keyframes drawer-in {
+  from {
+    transform: translateX(32px);
+    opacity: 0.3;
+  }
+}
+@keyframes drawer-out {
+  to {
+    transform: translateX(36px);
+    opacity: 0;
+  }
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-4) var(--pad-x) var(--s-2);
+}
+.modal-head h2 {
+  margin: 0;
+  font-size: var(--t-h2);
+  font-weight: 700;
+  letter-spacing: var(--track-tight);
+}
+.modal-body {
+  padding: 0 var(--s-4) var(--s-4);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+/* flex items shrink by default, so a card inside a scrolling flex column gets
+   squashed and its overflow:hidden clips a row mid-glyph instead of the body
+   scrolling — anything in a scrollable column must refuse to shrink */
+.modal-body > *,
+.pane > *,
+.pane-scroll > *,
+.doc-body > *,
+.settings-main > * {
+  flex-shrink: 0;
+}
+/* the WebSocket pane is the one pane that must not scroll as a whole: the stream
+   owns the leftover height and scrolls inside itself, so the composer stays
+   reachable no matter how many frames have arrived */
+.ws-pane {
+  overflow: hidden;
+}
+.ws-pane > .ws-body {
+  flex: 1 1 auto;
+  flex-shrink: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* only the stream may shrink; the head bar and the composer card both carry
+   `overflow: hidden`, so as flex items they had no automatic minimum and were
+   being crushed until the send box hung below the fold */
+.ws-body > .response-head,
+.ws-body > .group {
+  flex: none;
+}
+/* ============================================================ settings
+   Obsidian's settings window: a nav column that names the sections, and a pane
+   that shows exactly one of them. The whole point is that you never scroll a
+   long form hunting for one field. */
+.settings {
+  display: grid;
+  grid-template-columns: 172px minmax(0, 1fr);
+  align-items: stretch;
+  min-height: 330px;
+}
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s-1) var(--s-2) var(--s-1) 0;
+  border-right: 1px solid var(--line);
+}
+.settings-nav button {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 30px;
+  padding: 0 var(--s-3);
+  line-height: 1;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-dim);
+  font-size: var(--t-sub);
+  font-weight: var(--w-medium);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.settings-nav button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.settings-nav button.on {
+  /* the "you are here" accent, like the rail, the tree row and the tab
+     underline. Indigo here made the current section look like a button to press. */
+  background: var(--current-soft);
+  color: var(--current-ink);
+  font-weight: 600;
+}
+.settings-nav svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.settings-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding-left: var(--s-4);
+}
+.settings-title {
+  font-size: var(--t-h2);
+  font-weight: 700;
+  letter-spacing: var(--track-tight);
+  color: var(--text);
+}
+.settings-sub {
+  margin-top: calc(-1 * var(--s-2));
+  font-size: var(--t-sub);
+  color: var(--text-faint);
+}
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  border-top: 1px solid var(--line);
+  background: var(--bg-panel);
+}
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.section > h4 {
+  margin: 0;
+  font-size: var(--t-sub);
+  color: var(--text-faint);
+  font-weight: var(--w-medium);
+}
+/* ---- environment pane: a settings screen, not a form dump ---- */
+.env-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-1);
+  padding: var(--s-5) var(--pad-x) var(--s-3);
+}
+/* the name is a large title, not a bordered field, until you touch it */
+.env-name {
+  width: 100%;
+  max-width: 460px;
+  margin-left: -4px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 2px 4px;
+  font-size: var(--t-h1);
+  font-weight: 700;
+  letter-spacing: var(--track-tight);
+  color: var(--text);
+}
+.env-name:hover {
+  background: var(--bg-hover);
+}
+.env-name:focus {
+  outline: none;
+  background: var(--bg-panel);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.env-name::placeholder {
+  color: var(--text-faint);
+  font-weight: var(--w-medium);
+}
+/* the swatch/action line spans the pane; the title and tag do not */
+.env-hero > .inline {
+  align-self: stretch;
+}
+.env-hero h2 {
+  margin: 0;
+  font-size: var(--t-h1);
+  font-weight: 700;
+  letter-spacing: var(--track-tight);
+}
+.env-hero .hint {
+  font-size: var(--t-sub);
+}
+.env-swatches {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.env-swatches .swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  opacity: 0.55;
+  transform: scale(0.86);
+}
+.env-swatches .swatch:hover {
+  opacity: 0.85;
+  transform: scale(1);
+}
+.env-swatches .swatch.on {
+  opacity: 1;
+  transform: scale(1);
+  box-shadow: 0 0 0 2px var(--bg-panel), 0 0 0 4px var(--accent);
+}
+.env-kv {
+  margin-top: 0;
+}
+.env-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: calc(-1 * var(--s-1));
+  min-height: 0;
+}
+.env-chips:empty {
+  display: none;
+}
+.divider-h {
+  height: 1px;
+  background: var(--line);
+}
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pick {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r);
+  cursor: pointer;
+  background: var(--bg-panel);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.pick:hover {
+  background: var(--bg-inset);
+}
+.pick.on {
+  box-shadow: inset 0 0 0 2px var(--current);
+  background: var(--current-soft);
+}
+.pick .grow {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ============================================================ palette */
+.palette {
+  position: fixed;
+  top: 11vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(600px, 92vw);
+  background: var(--material-thick);
+  border-radius: var(--r-xl);
+  box-shadow: var(--elev-3);
+  z-index: 60;
+  overflow: hidden;
+}
+.palette input {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  padding: var(--s-4);
+  font-size: var(--t-h3);
+}
+.palette input:focus {
+  outline: none;
+}
+.palette-list {
+  max-height: 52vh;
+  overflow: auto;
+  padding: var(--s-1);
+}
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 10px;
+  line-height: 1;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-size: var(--t-body);
+}
+.palette-item.on,
+.palette-item:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.palette-item .sub {
+  color: var(--text-faint);
+  font-size: var(--t-sub);
+  margin-left: auto;
+}
+.palette-item.on .sub {
+  color: var(--on-accent);
+  opacity: 0.8;
+}
+
+/* ============================================================ menu
+   Translucent, generous, and the highlight is a fill — never a border swap. */
+.menu {
+  min-width: 196px;
+  max-width: min(420px, calc(100vw - 12px));
+  max-height: calc(100vh - 12px);
+  overflow: auto;
+  padding: 5px;
+  background: var(--material-thick);
+  border-radius: var(--r);
+  box-shadow: var(--elev-2), inset 0 0 0 1px var(--line);
+  z-index: 70;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 9px;
+  height: 28px;
+  line-height: 1;
+  border-radius: var(--r-xs);
+  font-size: var(--t-sub);
+  color: var(--text);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.menu-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.menu-item > :not(.menu-label) { flex-shrink: 0; }
+.menu-item:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.menu-item:hover svg {
+  color: var(--on-accent);
+}
+.menu-item.danger {
+  color: var(--err-ink);
+}
+.menu-item.danger:hover {
+  background: var(--err);
+  color: var(--on-danger);
+}
+.menu-item.disabled {
+  color: var(--text-faint);
+  cursor: default;
+  opacity: 0.6;
+}
+.menu-item.disabled:hover {
+  background: none;
+}
+/* the row that is already true — a listbox needs to say which one it is, and it
+   says it in the "you are here" accent like every other one in the app */
+.menu-item.on {
+  color: var(--current-ink);
+}
+/* The list itself holds focus so the arrow keys reach it. It does not also wear
+   the global :focus-visible ring — that doubled up with the menu's own border and
+   made every keyboard-opened menu look different from a mouse-opened one. The
+   .cursor row is the real keyboard indicator. */
+.menu:focus,
+.menu:focus-visible {
+  outline: none;
+}
+.menu-mark {
+  margin-left: auto;
+  padding-left: var(--s-4);
+  display: grid;
+  place-items: center;
+  color: var(--current-ink);
+}
+/* where the keyboard is. Hover already paints --bg-hover, so a hovered and a
+   arrowed-to row look identical, which is the point. */
+.menu-item.cursor {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.menu-item.cursor .menu-hint {
+  opacity: 1;
+}
+.menu-hint {
+  margin-left: auto;
+  padding-left: var(--s-4);
+  font-size: var(--t-cap);
+  color: var(--text-faint);
+}
+.menu-item:hover .menu-hint {
+  opacity: 0.8;
+}
+/* A row's secondary verb: quiet until the row is live, then it takes the same
+   ink as the label so it stays legible on the accent fill. */
+.menu-side {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-xs);
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+}
+.menu-hint + .menu-side {
+  margin-left: 6px;
+}
+.menu-item:hover .menu-side,
+.menu-side:focus-visible {
+  opacity: 1;
+}
+.menu-side:hover {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+.menu-side svg {
+  width: 13px;
+  height: 13px;
+}
+.menu-sep {
+  height: 1px;
+  background: var(--line);
+  margin: 5px 6px;
+}
+/* the method picker colours its own rows, so the verb reads before the words */
+.menu-item.method-get { color: var(--m-get); }
+.menu-item.method-post { color: var(--m-post); }
+.menu-item.method-put { color: var(--m-put); }
+.menu-item.method-patch { color: var(--m-patch); }
+.menu-item.method-delete { color: var(--m-delete); }
+.menu-item.method-head,
+.menu-item.method-options { color: var(--m-other); }
+.menu-item svg {
+  width: 14px;
+  height: 14px;
+  color: var(--text-faint);
+}
+
+/* ============================================================ toasts */
+.toasts {
+  position: fixed;
+  right: var(--s-4);
+  bottom: var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  z-index: 80;
+  max-width: 420px;
+}
+.toast {
+  background: var(--material-thick);
+  border-radius: var(--r);
+  box-shadow: var(--elev-2), inset 0 0 0 1px var(--line);
+  padding: 10px var(--s-3);
+  font-size: var(--t-body);
+  line-height: 1.55;
+  word-break: break-word;
+}
+.toast.err {
+  box-shadow: var(--shadow), inset 0 0 0 1px color-mix(in srgb, var(--err) 45%, transparent);
+  color: var(--err-ink);
+}
+.toast.ok {
+  box-shadow: var(--shadow), inset 0 0 0 1px color-mix(in srgb, var(--ok) 45%, transparent);
+  color: var(--ok-ink);
+}
+
+/* ============================================================ syntax */
+.tok-key {
+  color: var(--tok-key);
+}
+.tok-str {
+  color: var(--tok-str);
+}
+.tok-bool {
+  color: var(--tok-bool);
+}
+.tok-num {
+  color: var(--tok-num);
+}
+
+/* ============================================================ environment tab */
+.chip {
+  font-family: var(--font-mono);
+  font-size: var(--t-sub);
+  line-height: 1;
+  padding: 5px 9px;
+  border-radius: var(--r-pill);
+  background: var(--bg-inset);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  color: var(--text-dim);
+}
+.chip:hover {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* ============================================================ runners
+   A plan is a settings screen and a report at the same time, so it reuses the
+   card geometry every other sub-page already settled on: no new radius, shadow,
+   duration or spacing value. The only new vocabulary is the per-step result row,
+   which deliberately borrows the tree row it points back at. */
+.runner-pane {
+  gap: var(--s-5);
+  padding: var(--s-5) var(--s-6) var(--s-8);
+}
+.runner-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+.runner-title {
+  min-width: 0;
+}
+.runner-title .req-title {
+  /* reuse the request pane's title field so a plan is renamed exactly the way a
+     request is — same type, same focus ring, same nothing-happens-until-blur */
+  font-size: var(--t-h2);
+  font-weight: 700;
+  letter-spacing: var(--track-tight);
+}
+.runner-title .hint {
+  margin-top: 3px;
+}
+/* live progress: a pill track with the "you are here" accent filling it step by step */
+.run-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 0 var(--s-1);
+}
+.run-bar {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--bg-active);
+  overflow: hidden;
+}
+.run-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--i, 0) / max(var(--n, 1), 1) * 100%);
+  border-radius: var(--r-pill);
+  background: var(--current);
+  transition: width var(--dur-2) var(--ease);
+}
+.count.running {
+  background: var(--current-soft);
+  color: var(--current-ink);
+}
+
+/* the ordered collection list — a plan step is a row, not a card */
+.plan-list {
+  gap: var(--s-2);
+}
+.plan-step {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 32px;
+  padding: 0 var(--s-1);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+}
+.plan-step:hover {
+  background: var(--bg-hover);
+}
+.plan-step .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-no {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-xs);
+  background: var(--bg-active);
+  color: var(--text-dim);
+  font-size: var(--t-cap);
+  font-weight: 600;
+}
+/* a step can now be a whole collection or one request, so say which — otherwise
+   a lone request in the list looks like it lost its children */
+.plan-kind {
+  flex: none;
+  padding: 1px var(--s-2);
+  border-radius: var(--r-xs);
+  background: var(--bg-active);
+  color: var(--text-dim);
+  font-size: var(--t-cap);
+}
+.plan-move {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease);
+}
+.plan-step:hover .plan-move,
+.plan-step:focus-within .plan-move {
+  opacity: 1;
+}
+.plan-move .btn {
+  height: 24px;
+  padding: 0 6px;
+}
+
+/* result rows */
+.run-block {
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+.run-head,
+.run-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  cursor: pointer;
+}
+.run-head:hover,
+.run-entry:hover {
+  background: var(--bg-hover);
+}
+.run-head {
+  font-weight: 600;
+}
+.run-head .name {
+  flex: none;
+}
+.run-head .openable {
+  margin-left: auto;
+  transition: transform var(--dur-2) var(--ease);
+}
+.run-head .openable.open {
+  transform: rotate(90deg);
+}
+.run-entries {
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-1) 0 var(--s-2);
+  border-top: 1px solid var(--line);
+}
+.run-entry {
+  font-size: var(--t-sub);
+  color: var(--text-dim);
+}
+.run-entry .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-col {
+  flex: none;
+  min-width: 54px;
+  text-align: right;
+}
+/* the reason rides along with the name so the three numeric columns stay in a
+   straight line no matter how long the sentence is */
+.run-reason {
+  margin-left: var(--s-2);
+  color: var(--text-faint);
+  font-size: var(--t-cap);
+}
+.run-entry.fail .run-reason {
+  color: var(--err);
+}
+.run-dot,
+.run-mark {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.run-entry.pass .run-dot,
+.run-mark.pass {
+  background: var(--ok);
+}
+.run-entry.fail .run-dot,
+.run-mark.fail {
+  background: var(--err);
+}
+.run-mark.stop {
+  background: var(--warn);
+}
+.run-entry.skip .run-dot {
+  /* a skipped step is neither good nor bad — it just was not in the queue */
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--line-strong);
+}
+.runner-next {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.5;
+}
+.runner-next svg {
+  width: 13px;
+  height: 13px;
+  color: var(--text-faint);
+  flex: none;
+}
+.warn-text {
+  color: var(--warn);
+}
+
+/* ============================================================ utilities */
+.hidden {
+  display: none !important; /* debt-allow: beats a UA rule that a class cannot out-specify */
+}
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+.nowrap {
+  white-space: nowrap;
+}
+.right {
+  margin-left: auto;
+}
+.dim {
+  color: var(--text-dim);
+}
+.faint {
+  color: var(--text-faint);
+}
+.small {
+  font-size: var(--t-sub);
+}
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+.check {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+}
+.kv-cell select {
+  cursor: pointer;
+}
+textarea.textarea {
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 9px 11px;
+  font-family: var(--font-mono);
+  font-size: var(--t-sub);
+  line-height: 1.65;
+  width: 100%;
+}
+textarea.textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* ============================================================ motion
+   Four verbs, each tied to a change in hierarchy rather than to whatever
+   element happens to mount:
+     reveal       a peer surface replaces another (tab, rail)  -> view transition fade-through
+     push         one level deeper (sidebar -> pane)           -> view transition slide
+     present      a layer arrives over the app (sheet, dialog) -> rises while the host recedes
+     materialize  a transient anchored to its trigger (menu)   -> springs out of the anchor
+   Anything not covered by a verb does not move. */
+.btn,
+.icon-btn,
+.rail-btn,
+.node,
+.tab,
+.subtab,
+.chip,
+.tag,
+.pill,
+.pick,
+.menu-item,
+.palette-item,
+.kv-plus,
+.kv-del,
+.swatch,
+.tab .close,
+.node-actions button,
+.split-handle span {
+  transition:
+    background-color var(--dur-1) var(--ease),
+    box-shadow var(--dur-2) var(--ease),
+    color var(--dur-1) var(--ease),
+    transform var(--dur-2) var(--ease-spring),
+    opacity var(--dur-2) var(--ease);
+}
+.input,
+.select,
+.textarea,
+.url-input,
+.req-title,
+.node-rename {
+  transition:
+    border-color var(--dur-2) var(--ease),
+    box-shadow var(--dur-2) var(--ease),
+    background-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
+}
+/* iOS highlight: the fill goes down and the object settles back with a spring */
+.btn:active:not(:disabled),
+.rail-btn:active,
+.tab:active,
+.subtab:active,
+.node:active,
+.menu-item:active,
+.palette-item:active,
+.chip:active,
+.seg button:active {
+  transform: scale(0.965);
+  filter: brightness(0.94);
+}
+.node .twist {
+  transition: transform var(--dur-2) var(--ease);
+}
+.tab.active {
+  transition:
+    background-color var(--dur-2) var(--ease),
+    box-shadow var(--dur-3) var(--ease-spring),
+    color var(--dur-1) var(--ease);
+}
+
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@keyframes veil-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes veil-out {
+  to {
+    opacity: 0;
+  }
+}
+
+.menu,
+.slash {
+  animation: materialize var(--dur-2) var(--ease-spring);
+  transform-origin: top left;
+}
+.menu.menu-end,
+.slash.slash-end {
+  transform-origin: top right;
+}
+.palette {
+  animation: present var(--dur-3) var(--ease);
+}
+.toast {
+  animation: present var(--dur-3) var(--ease);
+}
+.toasts .toast {
+  transform-origin: bottom right;
+}
+/* a streamed event arriving is the one list change that should announce itself */
+.event {
+  animation: reveal var(--dur-2) var(--ease) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important; /* debt-allow: reduced-motion has to win over every rule */
+    transition-duration: 1ms !important; /* debt-allow: reduced-motion has to win over every rule */
+  }
+}
+
+/* indeterminate bar for an in-flight request — the one thing that has to loop */
+.loading {
+  width: 132px;
+  height: 2px;
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 220% 100%;
+  animation: sweep 1.15s linear infinite;
+}
+@keyframes sweep {
+  from {
+    background-position: 130% 0;
+  }
+  to {
+    background-position: -130% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading {
+    animation: none !important; /* debt-allow: reduced-motion has to win over every rule */
+    background-position: 50% 0;
+  }
+}
+
+/* ============================================================ caption
+   The native frame is off, so these sit in the topbar and follow the theme. */
+.caption {
+  display: flex;
+  align-self: stretch;
+  margin-left: var(--s-1);
+  flex: none;
+  align-items: center;
+  padding: 0 5px;
+  gap: 2px;
+}
+.caption-btn {
+  width: 40px;
+  height: 30px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-dim);
+  display: grid;
+  place-items: center;
+}
+.caption-btn:hover {
+  background: var(--bg-active);
+  color: var(--text);
+}
+.caption-btn.close:hover {
+  background: var(--err);
+  color: var(--on-danger);
+}
+.caption-btn svg {
+  width: 15px;
+  height: 15px;
+}
+/* a maximised window touches the screen edges; the hairline would just read as
+   a stray line there */
+:root[data-maximized="true"] .app {
+  box-shadow: none;
+}
+
+/* ---- raw wire view ---- */
+.raw-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.raw-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--s-2) var(--pad-x);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-inset);
+  flex: none;
+}
+/* the charset picker belongs to the bar, so it takes the bar's small rhythm */
+.raw-charset {
+  height: 22px;
+  min-width: 132px;
+  padding: 0 8px;
+  font-size: var(--t-cap);
+  background-color: var(--bg-panel);
+  flex: none;
+}
+.raw-charset:disabled {
+  color: var(--text-faint);
+}
+.raw-log {
+  margin: 0;
+  padding: 10px 14px 18px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--t-sub);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.raw-chunk {
+  display: block;
+  padding: 3px 0 5px 10px;
+  margin-bottom: 3px;
+  border-left: 2px solid var(--line-strong);
+  transition: background-color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
+}
+.raw-chunk:hover {
+  background: var(--bg-inset);
+  border-left-color: var(--accent);
+}
+.raw-meta {
+  display: block;
+  color: var(--text-faint);
+  font-size: var(--t-cap);
+  letter-spacing: 0.3px;
+}
+
+/* ============================================================ documents */
+.doc-scroll {
+  background: transparent;
+}
+.doc-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--s-3) var(--pad-x) var(--s-1);
+  background: transparent;
+  border-bottom: none;
+  flex: none;
+}
+.doc-name {
+  flex: 0 1 460px;
+  min-width: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 2px 4px;
+  font-size: var(--t-h2);
+  font-weight: 600;
+  letter-spacing: var(--track-tight);
+  color: var(--text);
+}
+.doc-name:hover {
+  background: var(--bg-hover);
+}
+.doc-name:focus {
+  outline: none;
+  background: var(--bg-panel);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.doc-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-3) var(--s-5) 60px;
+  max-width: 1180px;
+}
+.doc-block {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 4px;
+}
+.doc-gutter {
+  display: flex;
+  justify-content: center;
+  padding-top: 6px;
+}
+.doc-grip {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--t-body);
+  line-height: 1;
+  padding: 2px 3px;
+  border-radius: var(--r-sm);
+  opacity: 0;
+  transition: opacity var(--dur-2) var(--ease), background-color var(--dur-1) var(--ease);
+}
+.doc-block:hover .doc-grip {
+  opacity: 1;
+}
+.doc-grip:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+/* ---- live editor: a transparent textarea over a styled copy of itself ---- */
+/* The field colour belongs on the container. On .md-src it painted an opaque
+   panel over .md-hl — which is the only copy that carries visible text, the
+   textarea itself being color: transparent — so typing into a document showed
+   nothing at all. */
+.md-edit {
+  position: relative;
+  background: var(--bg-panel);
+  border-radius: var(--r);
+}
+.md-hl,
+.md-src {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-mono);
+  line-height: 1.75;
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  letter-spacing: 0;
+  tab-size: 4;
+}
+.md-hl {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  color: var(--text);
+  overflow: hidden;
+}
+.md-src {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  background: transparent;
+  border-color: var(--accent);
+  color: transparent;
+  caret-color: var(--text);
+  resize: none;
+  overflow: hidden;
+}
+.md-src::selection {
+  background: var(--accent-soft);
+}
+.md-src::placeholder {
+  color: var(--text-faint);
+}
+.md-src:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.hl {
+  min-height: 1.75em;
+}
+.hl-mark {
+  color: var(--text-faint);
+}
+.hl-h {
+  font-weight: 700;
+  color: var(--accent-ink);
+}
+.hl-h .hl-mark {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+.hl-list .hl-mark {
+  color: var(--accent);
+  font-weight: 700;
+}
+.hl-quote {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.hl-fence {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.hl-codeblock,
+.hl-table {
+  color: var(--text-dim);
+}
+.hl-code {
+  color: var(--ok);
+}
+.hl-strong {
+  font-weight: 700;
+  color: var(--text);
+}
+.hl-link {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-soft);
+}
+
+/* ---- slash menu ---- */
+.slash {
+  position: absolute;
+  left: var(--s-3);
+  top: 40px;
+  z-index: 20;
+  min-width: 216px;
+  padding: 5px;
+  background: var(--material-thick);
+  border-radius: var(--r);
+  box-shadow: var(--shadow), inset 0 0 0 1px var(--line);
+}
+.slash-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  min-height: 29px;
+  padding: 0 9px;
+  border-radius: var(--r-xs);
+  font-size: var(--t-sub);
+  cursor: pointer;
+  color: var(--text);
+}
+.slash-item:hover,
+.slash-item.on {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* ---- rendered markdown ---- */
+.md-body {
+  padding: 4px 2px 6px;
+  border-radius: var(--r);
+  cursor: text;
+  font-size: var(--t-body);
+  line-height: 1.72;
+  color: var(--text);
+  transition: background-color var(--dur-1) var(--ease);
+}
+.md-body:hover {
+  background: var(--bg-hover);
+}
+.md-body.md-empty {
+  color: var(--text-faint);
+  font-size: var(--t-mono);
+  min-height: 26px;
+}
+.md-body.md-empty::after {
+  content: '写点什么，或粘贴一段 curl';
+}
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4 {
+  margin: 14px 0 6px;
+  line-height: 1.35;
+  letter-spacing: -0.1px;
+}
+.md-body h1 {
+  font-size: var(--t-h1);
+}
+.md-body h2 {
+  font-size: var(--t-h2);
+}
+.md-body h3 {
+  font-size: var(--t-h3);
+}
+.md-body h4 {
+  font-size: var(--t-body);
+  color: var(--text-dim);
+}
+.md-body > :first-child {
+  margin-top: 2px;
+}
+.md-body p {
+  margin: 6px 0;
+}
+.md-body a {
+  color: var(--accent-ink);
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent-soft);
+}
+.md-body a:hover {
+  border-bottom-color: var(--accent-ink);
+}
+.md-body code {
+  font-family: var(--font-mono);
+  font-size: var(--t-sub);
+  background: var(--bg-inset);
+  border: none;
+  box-shadow: inset 0 0 0 1px var(--line);
+  border-radius: var(--r-xs);
+  padding: 1px 5px;
+}
+.md-pre {
+  margin: var(--s-2) 0;
+  padding: 10px 12px;
+  background: var(--bg-inset);
+  border: none;
+  box-shadow: inset 0 0 0 1px var(--line);
+  border-radius: var(--r);
+  overflow: auto;
+}
+.md-pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: var(--t-mono);
+  line-height: 1.65;
+}
+.md-list {
+  margin: 6px 0 6px 20px;
+  padding: 0;
+}
+.md-list li {
+  margin: 3px 0;
+}
+.md-body blockquote {
+  margin: 8px 0;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--line-strong);
+  color: var(--text-dim);
+}
+.md-body hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 14px 0;
+}
+.md-table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: var(--t-body);
+  width: 100%;
+}
+.md-table th,
+.md-table td {
+  border: 1px solid var(--line);
+  padding: 6px 9px;
+  text-align: left;
+}
+.md-table th {
+  background: var(--bg-inset);
+  font-weight: 600;
+}
+.md-body img {
+  max-width: 100%;
+}
+
+/* ---- request block: command left, response right ---- */
+.doc-req {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s-3);
+  margin: var(--s-2) 0 var(--s-3);
+}
+.doc-cmd {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: 10px var(--pad-x);
+  background: var(--sheet-card);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--card-shadow);
+  min-width: 0;
+}
+.doc-curl {
+  width: 100%;
+  min-height: 54px;
+  border: none;
+  box-shadow: inset 0 0 0 1px var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  padding: 8px 10px;
+  font-size: var(--t-mono);
+  line-height: 1.65;
+  resize: none;
+  overflow: hidden;
+}
+.doc-curl:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.doc-cmd-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.doc-cmd-head .doc-summary {
+  flex: 1;
+  min-width: 0;
+}
+.doc-cmd-head .btn.sm {
+  padding: 2px 10px;
+  font-size: var(--t-cap);
+  flex: none;
+}
+.doc-summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 18px;
+  overflow: hidden;
+}
+.doc-sum-url {
+  font-size: var(--t-mono);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.doc-res {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: 10px var(--pad-x);
+  background: var(--sheet-card);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--card-shadow);
+  min-width: 0;
+  min-height: 96px;
+}
+.doc-res-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.doc-res-body {
+  margin: 0;
+  padding: 9px 11px;
+  background: var(--bg-inset);
+  border: none;
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: var(--t-mono);
+  line-height: 1.6;
+  max-height: 340px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.doc-res-error {
+  margin: 0;
+  color: var(--err-ink);
+  font-size: var(--t-sub);
+  line-height: 1.7;
+  word-break: break-word;
+}
+.node-doc svg {
+  color: var(--text-faint);
+}
+@media (max-width: 1180px) {
+  .doc-req {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---- view transitions: reveal and push are rendered here, on the snapshot ---- */
+.workspace {
+  view-transition-name: workspace;
+}
+::view-transition-old(root) {
+  animation: var(--vt-old, vt-out) var(--vt-dur, 300ms) var(--ease) both;
+}
+::view-transition-new(root) {
+  animation: var(--vt-new, vt-in) var(--vt-dur, 300ms) var(--ease) var(--vt-delay, 0ms) both;
+}
+/* switching tabs changes one region, so only that region is snapshotted; the
+   chrome holds still and the workspace turns over inside its own frame */
+:root[data-vt-region='1']::view-transition-old(root) {
+  display: none;
+}
+:root[data-vt-region='1']::view-transition-new(root) {
+  animation: none;
+}
+:root[data-vt-region='1']::view-transition-group(workspace) {
+  z-index: 1;
+}
+:root[data-vt-region='1']::view-transition-old(workspace) {
+  animation: var(--vt-old, vt-out) var(--vt-dur, 300ms) var(--ease) both;
+}
+:root[data-vt-region='1']::view-transition-new(workspace) {
+  animation: var(--vt-new, vt-in) var(--vt-dur, 300ms) var(--ease) var(--vt-delay, 0ms) both;
+}
+/* fade-through: the old screen gives up first, the new one arrives a beat later */
+@keyframes vt-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes vt-in {
+  from {
+    opacity: 0;
+  }
+}
+/* theme change: the whole surface breathes rather than cutting */
+@keyframes vt-theme-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes vt-theme-in {
+  from {
+    opacity: 0;
+  }
+}
+/* push: the next screen slides in from the direction you asked for */
+@keyframes vt-push-out-left {
+  to {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+}
+@keyframes vt-push-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+}
+@keyframes vt-push-out-right {
+  to {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+}
+@keyframes vt-push-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+}

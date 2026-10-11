@@ -1,0 +1,39 @@
+# Build outputs and Tauri-generated schemas
+/dist/
+/src-tauri/target/
+/src-tauri/gen/
+*.exe
+*.msi
+*.pdb
+
+# Local workspace data and saved directory locations
+data/
+data.bak-*/
+relay-location.json
+.relay-location.json
+relay-connection.json
+
+# Isolated QA runs and runtime caches
+/.design-qa/
+__pycache__/
+*.py[cod]
+node_modules/
+
+# Development-time audit dumps. These are per-run screenshots and report folders
+# produced by the test suites, not project documentation, and they are ~15 MB.
+/reports/
+
+# Scratch files from ad-hoc debugging sessions
+/shot*.png
+/tests/_*.py
+/.qwen_*.mjs
+
+# Local configuration and editor files
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
