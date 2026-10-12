@@ -1,5 +1,5 @@
 // User-facing contracts: overflow, saved state, cancellation and command routing.
-const {chromium}=require('./playwright');
+const {chromium}=require('./playwright.cjs');
 const fs=require('node:fs'),path=require('node:path');
 const results=[];function check(name,ok,detail){results.push({name,ok:!!ok,detail});console.log(`${ok?'PASS':'FAIL'} ${name}${ok?'':' '+JSON.stringify(detail)}`);}
 (async()=>{

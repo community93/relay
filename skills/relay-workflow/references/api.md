@@ -4,6 +4,22 @@ Authenticated native HTTP clients only. Read the saved connection JSON for `base
 
 Requests are capped at 2 MiB. Response bodies returned to AI may be bounded; Relay retains engine evidence. Commands return `{ok:true,data:...}` or `{ok:false,error:{code,message}}`. Conflict/busy errors use HTTP409. Unknown IDs use404. Invalid payloads use400. Persistence errors use500. On timeout inspect the entity by stable ID before retrying a write.
 
+## Scopes and the host allowlist
+
+Each connection grants one tier, and a higher tier includes everything below it:
+
+| tier | what it adds |
+| --- | --- |
+| `read` | `workspace.list`, `entity.get`, `job.get` |
+| `write` | collection / environment / request / document / runner upserts, `entity.open`, `document.export` |
+| `execute` | `request.execute`, `document.verify`, `runner.execute`, `job.cancel` |
+
+The user chooses the tier when opening the connection; the default grants no execute rights, and an `execute` connection must name at least one allowed host. `GET /v1/health` and `workspace.list` report the live `scope`, `allowedHosts`, and only the `actions` that scope can actually reach — call `workspace.list` first and treat that list as the whole surface rather than probing.
+
+Calling an action above the granted tier returns HTTP403 with `code:"insufficient_scope"` and a message naming the tier to ask for. Do not retry it in a loop and do not look for a workaround: ask the user to reopen the connection with a wider scope.
+
+`execute` additionally checks the resolved URL against the allowlist immediately before the request leaves Relay, after variable substitution. A blocked host returns `code:"scope"`. `document.verify` and `runner.execute` check **every** endpoint up front and refuse the whole job if any single one is off-list, so a refusal means nothing was sent — fix the allowlist or narrow the document, then retry.
+
 ## Discovery and updates
 
 ```json

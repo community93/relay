@@ -1,4 +1,4 @@
-const {chromium}=require('./playwright');
+const {chromium}=require('./playwright.cjs');
 const fs=require('node:fs'),path=require('node:path'),net=require('node:net'),{execFile}=require('node:child_process');
 const results=[];const check=(name,ok,detail)=>{results.push({name,ok:!!ok});console.log(`${ok?'PASS':'FAIL'} ${name}${ok?'':' '+JSON.stringify(detail)}`);};
 (async()=>{
@@ -10,6 +10,8 @@ const results=[];const check=(name,ok,detail)=>{results.push({name,ok:!!ok});con
   const dataPath=await page.evaluate(async()=>(await import('./js/api.js')).dataPath());if(path.resolve(dataPath).toLowerCase()!==path.resolve('.design-qa/native-data').toLowerCase())throw Error('Requires isolated data');
   check('连接默认关闭',await page.evaluate(async()=>!(await window.__TAURI__.core.invoke('automation_status'))));
   await page.getByRole('button',{name:'AI 连接',exact:true}).click();
+  await page.getByRole('radio',{name:'可执行'}).click();
+  await page.locator('.ai-connection-hosts input').fill('127.0.0.1');
   await page.getByRole('button',{name:'开启 AI 连接',exact:true}).click();await page.waitForSelector('.ai-connection-state.connected');
   config=await page.evaluate(()=>window.__TAURI__.core.invoke('automation_status'));
   fs.mkdirSync('reports/automation-0.1.15',{recursive:true});await page.waitForTimeout(300);await page.screenshot({path:'reports/automation-0.1.15/connection-light.png'});
@@ -20,6 +22,38 @@ const results=[];const check=(name,ok,detail)=>{results.push({name,ok:!!ok});con
   async function call(command){const r=await raw(command);if(!r.ok)throw Error(JSON.stringify(r));return r.data;}
   async function wait(id){for(let i=0;i<120;i++){const job=await call({action:'job.get',id});if(job.state!=='running')return job;await new Promise(r=>setTimeout(r,100));}throw Error('Job timeout');}
   check('未认证请求返回401',(await raw({action:'workspace.list'},{Authorization:''})).status===401);
+  /* ---- capability tiers -------------------------------------------------------
+     The tier check is the only thing standing between "an AI tool can drive Relay"
+     and "an AI tool can aim Relay at anything the user's saved credentials reach",
+     so the boundary is tested directly rather than assumed from the happy path. */
+  check('可执行连接回报权限与主机白名单',config.scope==='execute'&&Array.isArray(config.allowedHosts)&&config.allowedHosts.includes('127.0.0.1'),{scope:config.scope,hosts:config.allowedHosts});
+  const listed=await call({action:'workspace.list'});
+  const aRequestId=listed.collections[0]?.requests[0]?.id;
+  check('workspace.list 只回报当前权限可达的 action',listed.scope==='execute'&&listed.actions.includes('request.execute')&&listed.actions.length===15,{actions:listed.actions});
+  async function reopen(scope,allowedHosts){
+    await page.evaluate(()=>window.__TAURI__.core.invoke('automation_stop'));
+    config=await page.evaluate(async a=>window.__TAURI__.core.invoke('automation_start',{scope:a.scope,allowedHosts:a.allowedHosts}),{scope,allowedHosts});
+    headers.Authorization='Bearer '+config.token;
+    return config;
+  }
+  await reopen('write',[]);
+  const refusedExecute=await raw({action:'request.execute',id:aRequestId});
+  check('可编辑连接下真实执行被403拒绝',refusedExecute.status===403&&refusedExecute.error.code==='insufficient_scope'&&/scope "execute"/.test(refusedExecute.error.message),refusedExecute);
+  check('可编辑连接仍可写入配置',(await raw({action:'entity.get',type:'request',id:aRequestId})).status===200);
+  await reopen('read',[]);
+  const refusedWrite=await raw({action:'environment.upsert',data:{name:'只读越权'}});
+  check('只读连接下写入被403拒绝',refusedWrite.status===403&&refusedWrite.error.code==='insufficient_scope',refusedWrite);
+  check('只读连接仍可读取',(await raw({action:'workspace.list'})).status===200);
+  check('未知 action 被拒绝',(await raw({action:'request.delete_everything'})).status===400);
+  check('空白名单的可执行连接开不起来',await page.evaluate(async()=>{try{await window.__TAURI__.core.invoke('automation_start',{scope:'execute',allowedHosts:[]});return 'started';}catch(e){return String(e&&e.message||e);}}).then(r=>r!=='started'&&/主机/.test(r)),'');
+  await reopen('execute',['127.0.0.1']);
+  const offList=await call({action:'request.upsert',id:'ai-offlist',collectionId:listed.collections[0].id,data:{draft:{method:'GET',url:'https://api.off-list.test/health'}}});
+  const blocked=await raw({action:'request.execute',id:'ai-offlist'});
+  check('白名单外主机在执行前被拦下',blocked.ok===false&&blocked.error.code==='scope'&&/off-list\.test/.test(blocked.error.message),blocked);
+  // Refusing before a job exists is the point: a blocked execution that still left a
+  // job record would look to the user like an attempt had been made.
+  check('被拦下的请求没有留下任务记录',blocked.error.jobId===undefined&&blocked.status===403,blocked);
+  await call({action:'request.upsert',id:'ai-offlist',collectionId:listed.collections[0].id,expectedRevision:offList.revision,data:{draft:{method:'GET',url:'http://127.0.0.1:19110/health'}}});
   check('错误token返回401',(await raw({action:'workspace.list'},{Authorization:'Bearer wrong'})).status===401);
   check('浏览器Origin请求返回403',(await raw({action:'workspace.list'},{Origin:'https://example.invalid'})).status===403);
   const health=await (await fetch(config.baseUrl+'/v1/health',{headers})).json();check('真实服务返回版本和实例ID',health.ok&&health.data.version==='0.1.15'&&health.data.instanceId===config.instanceId);

@@ -1,4 +1,4 @@
-const {chromium}=require('./playwright');
+const {chromium}=require('./playwright.cjs');
 const fs=require('fs'),path=require('path');
 (async()=>{
  const native=!!process.env.RELAY_CDP_URL;

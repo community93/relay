@@ -1,6 +1,6 @@
 // Real pointer and keyboard regression checks. Browser mode uses the existing
 // preview bridge; RELAY_CDP_URL connects the same checks to an isolated native app.
-const { chromium } = require('./playwright');
+const { chromium } = require('./playwright.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const results = [];

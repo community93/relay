@@ -6,9 +6,20 @@ import { contractOf, clone, scrub, safeResponse, endpointFields, endpointStatus,
 import { deliveryHtml, runBlock, cancelBlock } from './doc.js';
 import { runRunner, stopRunner, sessionOf, stepsOf } from './runner.js';
 import { inferProtocol } from './protocol.js';
-import { el, icon, modal, toast, copy, saveAs } from './ui.js';
+import { el, icon, modal, toast, copy, saveAs, segmented } from './ui.js';
 
 const actions = ['workspace.list','entity.get','collection.upsert','environment.upsert','request.upsert','document.upsert','document.endpoint.upsert','runner.upsert','request.execute','document.verify','runner.execute','job.get','job.cancel','document.export','entity.open'];
+/// Mirrors `action_tier`/`scope_tier` in src-tauri/src/automation.rs. The Rust test
+/// `every_frontend_action_is_graded` fails the build if the two drift apart.
+const ACTION_TIER = {
+  'workspace.list': 0, 'entity.get': 0, 'job.get': 0,
+  'collection.upsert': 1, 'environment.upsert': 1, 'request.upsert': 1, 'document.upsert': 1,
+  'document.endpoint.upsert': 1, 'runner.upsert': 1, 'entity.open': 1, 'document.export': 1,
+  'request.execute': 2, 'document.verify': 2, 'runner.execute': 2, 'job.cancel': 2,
+};
+const SCOPE_TIER = { read: 0, write: 1, execute: 2 };
+const tierOf = scope => SCOPE_TIER[scope] ?? 0;
+const reachableActions = scope => actions.filter(action => ACTION_TIER[action] <= tierOf(scope));
 const jobs = new Map();
 let queue = Promise.resolve(), connected = false;
 const fail = (code, message) => { throw Object.assign(Error(message), { code }); };
@@ -56,6 +67,23 @@ function redacted(value, secrets=[]) {
 }
 function resultEntity(value) { return {entity:redacted(value),revision:revision(value)}; }
 function busyDocument(doc) { if(doc.blocks.some(b=>b.running||b.preparing)||[...jobs.values()].some(j=>j.state==='running'&&j.documentId===doc.id))fail('busy','Document is running'); }
+/// The transport grades *which* actions a connection may call, but it cannot judge
+/// *where* a request goes: the URL is only absolute after variable resolution,
+/// which happens here. So the host allowlist is enforced at this last point before
+/// traffic leaves the machine.
+const hostOf = raw => { try { return new URL(raw).hostname.toLowerCase(); } catch { return null; } };
+const hostMatch = (pattern, host) => pattern.startsWith('*.')
+  ? host === pattern.slice(2) || host.endsWith(`.${pattern.slice(2)}`)
+  : pattern === host;
+async function requireHosts(urls, what) {
+  const connection = await api.invoke('automation_status');
+  const allowed = connection?.allowedHosts || [];
+  // Unparseable hosts fail closed: a URL we cannot read is not a URL we may send.
+  const blocked = [...new Set(urls.map(u => ({ raw: u, host: hostOf(u) }))
+    .filter(({ host }) => !host || !allowed.some(pattern => hostMatch(pattern, host)))
+    .map(({ raw, host }) => host || raw))];
+  if (blocked.length) fail('scope', `${what} targets host(s) outside this connection's allowlist: ${blocked.join(', ')}. Ask the user to add the host under Relay → AI → 允许的主机, then retry.`);
+}
 function parsedDraft(draft) {
   const out=clone(draft);
   if(!out.name)delete out.name;
@@ -122,7 +150,7 @@ export async function dispatch(command) {
   if(!actions.includes(command.action))fail('invalid','Unknown action');
   for(const key of ['id','collectionId','documentId','requestId'])idOf(command[key]);
   const {action,id,data={}}=command;
-  if(action==='workspace.list')return {apiVersion:1,actions,activeEnvironmentId:state.settings.activeEnvironmentId,collections:state.collections.map(c=>({id:c.id,name:c.name,revision:revision(c),requests:listRequests(c)})),environments:state.environments.map(e=>({id:e.id,name:e.name,revision:revision(e)})),documents:state.docs.map(d=>({id:d.id,name:d.name,revision:revision(d),endpoints:d.blocks.filter(b=>b.type==='req').map(b=>({id:b.id,sourceId:b.sourceId,status:endpointStatus(b)}))})),runners:state.runners.map(r=>({id:r.id,name:r.name,revision:revision(r)}))};
+  if(action==='workspace.list'){const c=await api.invoke('automation_status');return {apiVersion:2,scope:c?.scope||'read',allowedHosts:c?.allowedHosts||[],actions:reachableActions(c?.scope||'read'),activeEnvironmentId:state.settings.activeEnvironmentId,collections:state.collections.map(c=>({id:c.id,name:c.name,revision:revision(c),requests:listRequests(c)})),environments:state.environments.map(e=>({id:e.id,name:e.name,revision:revision(e)})),documents:state.docs.map(d=>({id:d.id,name:d.name,revision:revision(d),endpoints:d.blocks.filter(b=>b.type==='req').map(b=>({id:b.id,sourceId:b.sourceId,status:endpointStatus(b)}))})),runners:state.runners.map(r=>({id:r.id,name:r.name,revision:revision(r)}))};}
   if(action==='entity.get'){const value=entity(command.type,id);const result=resultEntity(value);if(command.type==='document')result.endpoints=value.blocks.filter(b=>b.type==='req').map(b=>({id:b.id,fields:redacted(endpointFields(b)),status:endpointStatus(b),issues:reviewIssues(b)}));return result;}
   if(action==='entity.open'){const value=entity(command.type,id);if(command.type==='request'){openRequest(value);state.pane='collections';}else if(command.type==='document'){openDoc(value);state.pane='docs';}else if(command.type==='runner'){openRunner(value);state.pane='runner';}else fail('invalid','Open a request, document or runner');state.overviewPane=false;emit('pane');emit('rerender');return {opened:id};}
   if(action==='collection.upsert'){
@@ -169,7 +197,7 @@ export async function dispatch(command) {
   }
   if(action==='request.execute'){
     fields(data,[]);const node=entity('request',id);busyRequest(node);if(node.protocol!=='http')fail('unsupported','Automatic execution currently supports HTTP; open SSE/WS in Relay');
-    const shell={refId:node.id,draft:clone(node.request),auth:clone(node.auth),protocol:'http'},built=buildSendDraft(shell,{environment:activeEnv()?clone(activeEnv()):null});if(built.missing.length)fail('variables',`Missing variables: ${built.missing.join(', ')}`);const snapshot=requestSnapshot(shell,built),execId=uid('ai');
+    const shell={refId:node.id,draft:clone(node.request),auth:clone(node.auth),protocol:'http'},built=buildSendDraft(shell,{environment:activeEnv()?clone(activeEnv()):null});if(built.missing.length)fail('variables',`Missing variables: ${built.missing.join(', ')}`);await requireHosts([built.draft.url],'This request');const snapshot=requestSnapshot(shell,built),execId=uid('ai');
     let cancelled=false;
     return jobStart({action,requestId:id},async()=>{
       const response=await api.execute(built.draft,execId);response.checkResult=evaluateChecks(built.preparedChecks,response);
@@ -180,11 +208,16 @@ export async function dispatch(command) {
     },()=>{cancelled=true;api.cancel(execId).catch(()=>{});});
   }
   if(action==='document.verify'){
-    fields(data,[]);const doc=entity('document',id);busyDocument(doc);const blocks=doc.blocks.filter(b=>b.type==='req');if(!blocks.length)fail('invalid','Document has no endpoints');for(const block of blocks){if(block.sourceId)busyRequest(entity('request',block.sourceId));const built=buildSendDraft({draft:block.draft,auth:block.auth,refId:block.sourceId});if(built.missing.length)fail('variables',`Missing variables: ${built.missing.join(', ')}`);}
+    fields(data,[]);const doc=entity('document',id);busyDocument(doc);const blocks=doc.blocks.filter(b=>b.type==='req');if(!blocks.length)fail('invalid','Document has no endpoints');const docUrls=[];for(const block of blocks){if(block.sourceId)busyRequest(entity('request',block.sourceId));const built=buildSendDraft({draft:block.draft,auth:block.auth,refId:block.sourceId});if(built.missing.length)fail('variables',`Missing variables: ${built.missing.join(', ')}`);docUrls.push(built.draft.url);}
+    // Refuse the whole document up front. Checking per-endpoint mid-run would send
+    // the allowed ones first and stop at the first blocked host, which is a partial
+    // verification that still looks like a run happened.
+    await requireHosts(docUrls,'This document');
     let cancelled=false;return jobStart({action,documentId:id},async()=>{const endpoints=[];for(const block of blocks){if(cancelled)break;await runBlock(doc,block);endpoints.push({id:block.id,status:endpointStatus(block),response:redacted(block.response,block.lastRequestSnapshot?.secrets||[]),issues:reviewIssues(block)});}await flushDomain('docs',{strict:true});return {endpoints,revision:revision(doc),ok:endpoints.length===blocks.length&&endpoints.every(e=>['verified','ready'].includes(e.status.kind))};},()=>{cancelled=true;for(const block of blocks)if(block.running)cancelBlock(doc,block);});
   }
   if(action==='runner.execute'){
     fields(data,[]);const runner=entity('runner',id);if(sessionOf(id))fail('busy','Runner is active');const steps=stepsOf(runner);if(!steps.some(s=>!s.skip))fail('invalid','No executable requests');for(const step of steps)busyRequest(step.node);
+    await requireHosts(steps.filter(step=>!step.skip).map(step=>buildSendDraft({draft:step.node.request,auth:step.node.auth,refId:step.node.id},{environment:activeEnv()?clone(activeEnv()):null}).draft.url),'This runner');
     return jobStart({action,runnerId:id},async()=>{const run=await runRunner(runner,{trigger:'AI'});await flushDomain('runs',{strict:true});return {run:redacted(run),ok:!!run&&!run.cancelled&&run.totals.failed===0&&run.totals.passed>0};},()=>stopRunner(id));
   }
   if(action==='job.get'||action==='job.cancel'){
@@ -210,16 +243,79 @@ export async function installAutomation() {
     });
   });
 }
+const SCOPE_OPTIONS = [['read', '只读'], ['write', '可编辑'], ['execute', '可执行']];
+const SCOPE_LABEL = { read: '只读', write: '可编辑', execute: '可执行' };
+const parseHosts = raw => [...new Set(String(raw || '').split(/[\s,;]+/)
+  .map(h => h.trim().replace(/^https?:\/\//, '').replace(/[/:].*$/, '').toLowerCase())
+  .filter(h => /^[a-z0-9*.-]+$/.test(h) && h.includes('.')))].slice(0, 64);
+
 export async function openAutomationDialog() {
-  const status=el('span',{class:'ai-connection-state'}),address=el('code',{class:'ai-connection-address'}),actionsHost=el('div',{class:'ai-connection-actions'}),error=el('p',{class:'variable-form-error',role:'alert'});
-  const draw=async()=>{
-    const connection=await api.invoke('automation_status');status.textContent=connection?'已连接 · 仅本机':'未开启';status.classList.toggle('connected',!!connection);address.textContent=connection?.baseUrl||'开启后，AI 工具可操作当前工作区';
-    actionsHost.replaceChildren(...(connection?[
-      el('button',{class:'btn primary',text:'保存连接配置',onclick:()=>saveAs({name:'relay-connection.json',text:JSON.stringify(connection,null,2),extensions:['json']})}),
-      el('button',{class:'btn',text:'复制配置',onclick:()=>copy(JSON.stringify(connection,null,2))}),
-      el('button',{class:'btn ghost',text:'断开',onclick:async()=>{await api.invoke('automation_stop');await draw();}}),
-    ]:[el('button',{class:'btn primary',text:'开启 AI 连接',onclick:async()=>{try{await api.invoke('automation_start');await draw();}catch(e){error.textContent=String(e.message||e);}}})]));
+  const body = el('div', { class: 'ai-connection-body' });
+  const error = el('p', { class: 'variable-form-error', role: 'alert' });
+  const draw = async () => {
+    error.textContent = '';
+    let connection = null;
+    try { connection = await api.invoke('automation_status'); } catch { /* not available outside the app */ }
+    body.replaceChildren(connection ? connectedView(connection) : startView());
   };
-  modal({title:'AI 连接',width:600,cancelText:'关闭',body:[el('div',{class:'ai-connection-card'},[el('span',{class:'ai-connection-symbol','aria-hidden':'true'},[icon('braces')]),el('div',{},[status,address])]),actionsHost,el('p',{class:'hint',text:'创建请求、运行检查、编写文档。连接配置包含访问凭证，关闭应用后失效。'}),error]});
-  try{await draw();}catch{error.textContent='请在 Relay 应用中开启连接';}
+  const connectedView = connection => {
+    const scope = SCOPE_LABEL[connection.scope] || connection.scope || '只读';
+    const limit = connection.scope === 'execute'
+      ? ` · 仅 ${(connection.allowedHosts || []).join(' / ') || '无主机'}` : '';
+    return el('div', { class: 'stack' }, [
+      el('div', { class: 'ai-connection-card' }, [
+        el('span', { class: 'ai-connection-symbol', 'aria-hidden': 'true' }, [icon('braces')]),
+        el('div', {}, [
+          el('span', { class: 'ai-connection-state connected', text: '已连接 · 仅本机' }),
+          el('code', { class: 'ai-connection-address', text: connection.baseUrl }),
+          // The grant is shown where the credential is copied from, so the person
+          // handing the file to an AI tool sees what they are handing over.
+          el('span', { class: 'ai-connection-scope', text: `权限：${scope}${limit}` }),
+        ]),
+      ]),
+      el('div', { class: 'ai-connection-actions' }, [
+        el('button', { class: 'btn primary', text: '保存连接配置', onclick: () => saveAs({ name: 'relay-connection.json', text: JSON.stringify(connection, null, 2), extensions: ['json'] }) }),
+        el('button', { class: 'btn', text: '复制配置', onclick: () => copy(JSON.stringify(connection, null, 2)) }),
+        el('button', { class: 'btn ghost', text: '断开', onclick: async () => { await api.invoke('automation_stop'); await draw(); } }),
+      ]),
+    ]);
+  };
+  function startView() {
+    let scope = 'write';
+    // Prefill from the environment the user is actually working in; a blank box
+    // here would just be refused on submit.
+    const guess = hostOf(activeEnv()?.defaults?.baseUrl || '') || '';
+    const hosts = el('input', { class: 'input mono', placeholder: 'api.test 或 *.example.com', value: guess, disabled: true });
+    const hostField = el('div', { class: 'field ai-connection-hosts' }, [
+      el('label', { text: '允许的主机' }), hosts,
+      el('span', { class: 'hint', text: '逗号或换行分隔，* 开头匹配子域。AI 只能向这些地址发请求。' }),
+    ]);
+    const seg = segmented(SCOPE_OPTIONS, scope, value => {
+      scope = value;
+      hosts.disabled = value !== 'execute';
+      hostField.classList.toggle('muted', value !== 'execute');
+    });
+    return el('div', { class: 'stack' }, [
+      el('div', { class: 'ai-connection-card' }, [
+        el('span', { class: 'ai-connection-symbol', 'aria-hidden': 'true' }, [icon('braces')]),
+        el('div', {}, [
+          el('span', { class: 'ai-connection-state', text: '未开启' }),
+          el('code', { class: 'ai-connection-address', text: '开启后，AI 工具可操作当前工作区' }),
+        ]),
+      ]),
+      el('div', { class: 'field' }, [el('label', { text: '权限' }), seg,
+        el('span', { class: 'hint', text: '只读：查看集合与文档。可编辑：另可创建和修改。可执行：另可真实发送请求。' })]),
+      hostField,
+      el('div', { class: 'ai-connection-actions' }, [
+        el('button', { class: 'btn primary', text: '开启 AI 连接', onclick: async () => {
+          const allowed = scope === 'execute' ? parseHosts(hosts.value) : [];
+          if (scope === 'execute' && !allowed.length) { error.textContent = '可执行需要至少填一个允许的主机'; hosts.focus(); return; }
+          try { await api.invoke('automation_start', { scope, allowedHosts: allowed }); await draw(); }
+          catch (e) { error.textContent = String(e?.message || e); }
+        } }),
+      ]),
+    ]);
+  }
+  modal({ title: 'AI 连接', width: 600, cancelText: '关闭', body: [body, el('p', { class: 'hint', text: '连接配置包含访问凭证，关闭应用后失效。默认不给执行权。' }), error] });
+  try { await draw(); } catch { error.textContent = '请在 Relay 应用中开启连接'; }
 }

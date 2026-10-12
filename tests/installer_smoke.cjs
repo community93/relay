@@ -1,4 +1,4 @@
-const {chromium}=require('./playwright');
+const {chromium}=require('./playwright.cjs');
 const fs=require('node:fs'),path=require('node:path');
 (async()=>{
  const browser=await chromium.connectOverCDP('http://127.0.0.1:9226'),page=browser.contexts()[0].pages()[0],errors=[],rows=[];

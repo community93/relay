@@ -1,5 +1,5 @@
 // Use real save controls, then reopen collection nodes and reload persisted data.
-const {chromium}=require('./playwright');
+const {chromium}=require('./playwright.cjs');
 const fs=require('node:fs'),path=require('node:path'),results=[];
 const check=(name,ok,detail)=>{results.push({name,ok:!!ok,detail});console.log(`${ok?'PASS':'FAIL'} ${name}${ok?'':' '+JSON.stringify(detail)}`);};
 (async()=>{

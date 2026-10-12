@@ -1,4 +1,4 @@
-const {chromium}=require('./playwright');
+const {chromium}=require('./playwright.cjs');
 const path=require('node:path'),fs=require('node:fs');
 const results=[];function check(name,ok){results.push({name,ok:!!ok});console.log(`${ok?'PASS':'FAIL'} ${name}`);}
 (async()=>{

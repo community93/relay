@@ -6,3 +6,7 @@
 .ai-connection-state.connected { color:var(--accent) }
 .ai-connection-address { font-size:12px; color:var(--text-dim); overflow-wrap:anywhere }
 .ai-connection-actions { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px }
+/* The grant is stated in the same card as the address and the copy button, so it
+   is read at the moment the credential is handed over rather than after. */
+.ai-connection-scope { font-size:var(--t-cap); color:var(--text-faint); overflow-wrap:anywhere }
+.ai-connection-hosts.muted { opacity:.5 }
