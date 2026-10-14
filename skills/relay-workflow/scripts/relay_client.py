@@ -76,7 +76,19 @@ def main():
     parser.add_argument("--config", default=os.environ.get("RELAY_CONNECTION"), help="Connection JSON path (or RELAY_CONNECTION)")
     sub = parser.add_subparsers(dest="operation", required=True)
     sub.add_parser("health")
-    sub.add_parser("list")
+    listing = sub.add_parser("list", help="Workspace map: entities with counts, not every request")
+    listing.add_argument("--collection", help="Expand one collection id into its requests")
+    listing.add_argument("--limit", type=int, help="How many entries to return")
+    finder = sub.add_parser("find", help="Search requests by name or URL fragment")
+    finder.add_argument("query", nargs="?", help="Case-insensitive substring of a request name or URL")
+    finder.add_argument("--method", help="Filter by HTTP verb, e.g. POST")
+    finder.add_argument("--limit", type=int)
+    preview = sub.add_parser("preview", help="Resolve a request and audit its json paths without sending")
+    preview.add_argument("--id", required=True)
+    batch = sub.add_parser("batch", help="Run up to 20 commands in one round trip")
+    batch.add_argument("--file", required=True, help="Commands JSON file; - reads stdin")
+    batch.add_argument("--wait", action="store_true")
+    batch.add_argument("--wait-seconds", type=float, default=180)
     call = sub.add_parser("call")
     call.add_argument("--file", required=True, help="Command JSON file; - reads stdin")
     call.add_argument("--wait", action="store_true")
@@ -95,7 +107,36 @@ def main():
         if args.operation == "health":
             result = client.request("/v1/health")
         elif args.operation == "list":
-            result = client.command({"action": "workspace.list"})
+            command = {"action": "workspace.list"}
+            if args.collection:
+                command["collectionId"] = args.collection
+            if args.limit:
+                command["limit"] = args.limit
+            result = client.command(command)
+        elif args.operation == "find":
+            if not args.query and not args.method:
+                raise ClientError("find needs a query, --method, or both")
+            command = {"action": "entity.find"}
+            if args.query:
+                command["query"] = args.query
+            if args.method:
+                command["method"] = args.method
+            if args.limit:
+                command["limit"] = args.limit
+            result = client.command(command)
+        elif args.operation == "preview":
+            result = client.command({"action": "request.preview", "id": args.id})
+        elif args.operation == "batch":
+            source = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8-sig")
+            rows = json.loads(source)
+            if not isinstance(rows, list):
+                raise ClientError("batch expects a JSON array of command objects")
+            result = client.command({"commands": rows})
+            if args.wait:
+                for row in result.get("results", []):
+                    job_id = (row.get("data") or {}).get("jobId")
+                    if job_id:
+                        row["data"] = client.wait(job_id, args.wait_seconds)
         elif args.operation == "call":
             if not 1 <= args.wait_seconds <= 600:
                 raise ClientError("--wait-seconds must be 1–600")
@@ -114,6 +155,10 @@ def main():
             result["output"] = str(destination.resolve())
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if result.get("state") in ("failed", "cancelled") or result.get("result", {}).get("ok") is False:
+            return 2
+        # A batch that refused one command and a preview that found a bad path both
+        # answered successfully; the caller still needs a signal it can test for.
+        if result.get("ok") is False:
             return 2
         return 0
     except (ClientError, OSError, ValueError, TypeError, KeyError) as error:

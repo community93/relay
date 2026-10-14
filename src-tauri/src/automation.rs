@@ -39,9 +39,10 @@ pub struct Connection { enabled: bool, base_url: String, token: String, instance
 /// newly added frontend action cannot become reachable by being forgotten here.
 fn action_tier(action: &str) -> Option<u8> {
     let tier = match action {
-        "workspace.list" | "entity.get" | "job.get" | "mcp.tools" => 0,
+        "workspace.list" | "entity.find" | "entity.get" | "job.get" | "mcp.tools" => 0,
         "collection.upsert" | "environment.upsert" | "request.upsert" | "document.upsert"
-        | "document.endpoint.upsert" | "runner.upsert" | "entity.open" | "document.export" => 1,
+        | "document.endpoint.upsert" | "runner.upsert" | "entity.open" | "document.export"
+        | "request.preview" => 1,
         "request.execute" | "document.verify" | "runner.execute" | "job.cancel" => 2,
         _ => return None,
     };
@@ -180,7 +181,7 @@ async fn handle(mut stream: TcpStream, app: tauri::AppHandle, config: Connection
     };
     if let Err((status, message)) = authorize(&request, &config) { response(&mut stream, status, json!({"ok":false,"error":{"code":"access","message":message}})).await; return; }
     if request.method == "GET" && request.path == "/v1/health" {
-        response(&mut stream, 200, json!({"ok":true,"data":{"product":"Relay","version":env!("CARGO_PKG_VERSION"),"apiVersion":2,"instanceId":config.instance_id,"scope":config.scope,"allowedHosts":config.allowed_hosts}})).await; return;
+        response(&mut stream, 200, json!({"ok":true,"data":{"product":"Relay","version":env!("CARGO_PKG_VERSION"),"apiVersion":3,"instanceId":config.instance_id,"scope":config.scope,"allowedHosts":config.allowed_hosts}})).await; return;
     }
     if request.path == "/mcp" { mcp(&app, &config, &request, &mut stream).await; return; }
     if request.method != "POST" || request.path != "/v1/command" { response(&mut stream, 404, json!({"ok":false,"error":{"code":"not_found","message":"Unknown endpoint"}})).await; return; }
@@ -192,16 +193,62 @@ async fn handle(mut stream: TcpStream, app: tauri::AppHandle, config: Connection
 /// One command round-trip into the window. Both `/v1/command` and the MCP bridge go
 /// through here so there is exactly one capability gate and exactly one reply path.
 async fn forward(app: &tauri::AppHandle, config: &Connection, payload: Value) -> (u16, Value) {
+    let granted = scope_tier(&config.scope);
+    // A batch is expanded here rather than in the window: the gate has to see every
+    // command, and one that could hide a `request.execute` inside a list of reads
+    // would walk straight past the tier check.
+    if payload.get("commands").is_some() {
+        if let Err(refusal) = gate_batch(&payload, granted, config) { return refusal; }
+        return round_trip(app, config, payload).await;
+    }
     // Capability check before anything reaches the workspace. The message names the
     // tier to ask for, because an agent that gets a bare 403 just retries.
     let action = payload.get("action").and_then(Value::as_str).unwrap_or("");
     match action_tier(action) {
         None => return (400, json!({"ok":false,"error":{"code":"invalid","message":"Unknown action"}})),
-        Some(needed) if needed > scope_tier(&config.scope) => {
-            return (403, json!({"ok":false,"error":{"code":"insufficient_scope","message":format!("{} requires scope \"{}\"; this connection grants \"{}\". Ask the user to reopen the AI connection with a wider scope.",action,SCOPE_TIERS[needed as usize],config.scope)}}));
-        }
+        Some(needed) if needed > granted => return scope_refusal(action, needed, config),
         Some(_) => {}
     };
+    round_trip(app, config, payload).await
+}
+fn scope_refusal(what: &str, needed: u8, config: &Connection) -> (u16, Value) {
+    (403, json!({"ok":false,"error":{"code":"insufficient_scope","message":format!("{} requires scope \"{}\"; this connection grants \"{}\". Ask the user to reopen the AI connection with a wider scope.",what,SCOPE_TIERS[needed as usize],config.scope)}}))
+}
+/// Validate a whole batch before any of it runs. Refusing the batch rather than
+/// stopping at the first bad command matches `document.verify`: a partial batch that
+/// already wrote six entities looks, from here, like it succeeded.
+fn gate_batch(payload: &Value, granted: u8, config: &Connection) -> Result<(), (u16, Value)> {
+    const BATCH_LIMIT: usize = 20;
+    let rows = match payload.get("commands").map(Value::as_array) {
+        Some(Some(rows)) => rows,
+        _ => return Err((400, json!({"ok":false,"error":{"code":"invalid","message":"commands must be an array of command objects"}}))),
+    };
+    if rows.is_empty() {
+        return Err((400, json!({"ok":false,"error":{"code":"invalid","message":"commands is empty; send one command or list at least one"}})));
+    }
+    if rows.len() > BATCH_LIMIT {
+        return Err((400, json!({"ok":false,"error":{"code":"invalid","message":format!("commands has {} entries, over the {BATCH_LIMIT} limit; split it or use runner.execute", rows.len())}})));
+    }
+    if payload.get("action").is_some() {
+        return Err((400, json!({"ok":false,"error":{"code":"invalid","message":"commands and action cannot appear together; put every command inside the array"}})));
+    }
+    for (index, row) in rows.iter().enumerate() {
+        if !row.is_object() {
+            return Err((400, json!({"ok":false,"error":{"code":"invalid","message":format!("commands[{index}] must be an object")}})));
+        }
+        if row.get("commands").is_some() {
+            return Err((400, json!({"ok":false,"error":{"code":"invalid","message":format!("commands[{index}] has its own commands array; batches cannot nest")}})));
+        }
+        let action = row.get("action").and_then(Value::as_str).unwrap_or("");
+        match action_tier(action) {
+            None => return Err((400, json!({"ok":false,"error":{"code":"invalid","message":format!("commands[{index}] has an unknown action {action:?}")}}))),
+            Some(needed) if needed > granted => return Err(scope_refusal(&format!("commands[{index}] {action}"), needed, config)),
+            Some(_) => {}
+        }
+    }
+    Ok(())
+}
+async fn round_trip(app: &tauri::AppHandle, config: &Connection, payload: Value) -> (u16, Value) {
     let Ok(id) = random_id() else { return (500, json!({"ok":false,"error":{"code":"transport","message":"Could not allocate a request id"}})) };
     let (tx, rx) = oneshot::channel();
     let registered = {
@@ -340,14 +387,20 @@ mod tests {
     #[test] fn native_client_allowed() { assert!(authorize(&request(),&conn("execute")).is_ok()); }
     #[test] fn tokens_unique_and_long() { let a=random_id().unwrap();assert_eq!(a.len(),64);assert_ne!(a,random_id().unwrap()); }
 
+    /// Every action the frontend can dispatch. Two tests below read this one list:
+    /// that the transport grades all of them, and that all of them survive the MCP
+    /// tool-name flip. Two literal lists would let a new action pass one and miss
+    /// the other.
+    const KNOWN: [&str; 18] = ["workspace.list","entity.find","entity.get","job.get","mcp.tools",
+        "collection.upsert","environment.upsert","request.upsert","document.upsert",
+        "document.endpoint.upsert","runner.upsert","entity.open","document.export","request.preview",
+        "request.execute","document.verify","runner.execute","job.cancel"];
+
     #[test] fn every_frontend_action_is_graded() {
         // A new action that is not in the table would be refused, which is the safe
         // direction, but it would also silently break for real users. Keep the
         // transport's table and the frontend's list in step.
-        for action in ["workspace.list","entity.get","job.get","mcp.tools","collection.upsert","environment.upsert",
-                       "request.upsert","document.upsert","document.endpoint.upsert","runner.upsert",
-                       "entity.open","document.export","request.execute","document.verify",
-                       "runner.execute","job.cancel"] {
+        for action in KNOWN {
             assert!(action_tier(action).is_some(), "{action} has no scope tier");
         }
     }
@@ -355,10 +408,7 @@ mod tests {
     #[test] fn tool_names_round_trip_to_actions() {
         // Every graded action must survive the underscore flip that MCP tool names
         // need, or a client would faithfully call a tool that resolves to nothing.
-        for action in ["workspace.list","entity.get","job.get","mcp.tools","collection.upsert","environment.upsert",
-                       "request.upsert","document.upsert","document.endpoint.upsert","runner.upsert",
-                       "entity.open","document.export","request.execute","document.verify",
-                       "runner.execute","job.cancel"] {
+        for action in KNOWN {
             let name = action.replace('.', "_");
             assert_eq!(tool_action(&name).map(|(_, tier)| tier), action_tier(action), "{name}");
             assert!(!action.contains('_'), "{action} would be ambiguous as a tool name");
@@ -411,6 +461,49 @@ mod tests {
                                       "bad host".into(), "has/slash".into(), "x".into()].to_vec());
         assert_eq!(hosts, vec!["api.test", "x"]);
         assert_eq!(normalize_hosts(&(0..200).map(|i| format!("h{i}.test")).collect::<Vec<_>>()).len(), 64);
+    }
+    #[test] fn batch_is_gated_command_by_command() {
+        // The whole point of expanding a batch in the transport is that a client
+        // cannot park an execute among reads. Every case below must refuse the batch,
+        // not merely skip the offending entry.
+        let read = scope_tier("read");
+        let execute = scope_tier("execute");
+        let ok = json!({"commands":[{"action":"workspace.list"},{"action":"entity.get","type":"request","id":"a"}]});
+        assert!(gate_batch(&ok, execute, &conn("execute")).is_ok());
+        let smuggled = json!({"commands":[{"action":"workspace.list"},{"action":"request.execute","id":"a"}]});
+        let (status, body) = gate_batch(&smuggled, read, &conn("read")).unwrap_err();
+        assert_eq!(status, 403);
+        assert_eq!(body["error"]["code"], "insufficient_scope");
+        // The index has to be in the message, or the caller cannot find the offender.
+        assert!(body["error"]["message"].as_str().unwrap().contains("commands[1]"), "{}", body);
+        assert!(body["error"]["message"].as_str().unwrap().contains("commands[1] request.execute"), "{}", body);
+    }
+    #[test] fn malformed_batches_are_refused_with_a_usable_reason() {
+        let granted = scope_tier("execute");
+        let config = conn("execute");
+        let cases: Vec<(Value, &str)> = vec![
+            (json!({"commands": []}), "empty"),
+            (json!({"commands": "workspace.list"}), "must be an array"),
+            (json!({"commands": [{"action":"workspace.list"}], "action":"entity.get"}), "cannot appear together"),
+            (json!({"commands": [{"commands":[{"action":"workspace.list"}]}]}), "cannot nest"),
+            (json!({"commands": [{"action":"entity.delete_everything"}]}), "unknown action"),
+            (json!({"commands": ["workspace.list"]}), "must be an object"),
+            (json!({"commands": (0..21).map(|_| json!({"action":"workspace.list"})).collect::<Vec<_>>()}), "over the 20 limit"),
+        ];
+        for (payload, needle) in cases {
+            let (status, body) = gate_batch(&payload, granted, &config)
+                .err().unwrap_or_else(|| panic!("{payload} should have been refused"));
+            assert_eq!(status, 400, "{payload}");
+            let message = body["error"]["message"].as_str().unwrap_or_default();
+            assert!(message.to_lowercase().contains(needle), "expected {needle:?} in {message:?}");
+        }
+    }
+    #[test] fn a_valid_batch_reaches_the_window_once() {
+        // The gate's job ends at "may these run"; it must not rewrite the payload,
+        // because the frontend walks the same array and reports per-command results.
+        let payload = json!({"commands":[{"action":"workspace.list"},{"action":"job.get","id":"j1"}]});
+        assert!(gate_batch(&payload, scope_tier("read"), &conn("read")).is_ok());
+        assert_eq!(payload["commands"].as_array().unwrap().len(), 2);
     }
     #[test] fn execute_without_a_host_allowlist_is_rejected() {
         // Mirrors the guard in automation_start: the check exists because an

@@ -10,6 +10,20 @@ const check = (name, ok) => { results.push({ name, ok: !!ok }); console.log(`${o
   check('missing is distinct from null', !c.readPath({}, '$.nil').exists);
   check('inherited properties excluded', !c.readPath({}, '$.toString').exists);
   for (const path of ['data.x', '$..x', '$[*]', '$[0];globalThis.bad=true', '$["broken]']) { let failed = false; try { c.readPath({}, path); } catch { failed = true; } check(`reject ${path}`, failed); }
+  // The field-name pattern used to be ASCII-only, which silently made every
+  // Chinese-keyed response unaddressable with the dot form. Widening it must not
+  // turn the structural characters back into ordinary name characters.
+  const cjk = JSON.parse('{"数据":{"条目":[{"机构":"上海"}]}}');
+  check('path with CJK field names', c.readPath(cjk, '$.数据.条目[0].机构').value === '上海');
+  check('CJK path still stops at a bracket', c.readPath(cjk, '$.数据.条目').exists && Array.isArray(c.readPath(cjk, '$.数据.条目').value));
+  check('CJK miss is still a miss', !c.readPath(cjk, '$.数据.没有').exists);
+  // probePath has to say where it broke and what was there, which is what makes a
+  // wrong path fixable without another execution.
+  const probe = c.probePath(cjk, '$.数据.没有.更深');
+  check('probe names the segment that broke', !probe.exists && probe.missing === '没有' && probe.at === '$.数据', JSON.stringify(probe));
+  check('probe lists sibling keys', probe.available.join(',') === '条目', probe.available);
+  check('probe still resolves hits', c.probePath(cjk, '$.数据.条目[0].机构').value === '上海');
+  let probeRejected = false; try { c.probePath(cjk, '$..x'); } catch { probeRejected = true; } check('probe rejects bad grammar', probeRejected);
   check('legacy HTTP success', evaluate().ok);
   check('legacy HTTP failure', !evaluate([], [], { ...response, status: 401 }).ok);
   check('explicit expected 401 passes', evaluate([{ kind: 'status', expected: '401' }], [], { ...response, status: 401, ok: false }).ok);

@@ -1,11 +1,14 @@
 // A deliberately small JSON path grammar: $.user.id, $[0], $["a.b"]. No eval.
-export function readPath(value, path) {
+function pathParts(path) {
   let rest = String(path || '').trim();
   if (!rest.startsWith('$')) throw Error('路径需以 $ 开头');
   rest = rest.slice(1);
   const parts = [];
   while (rest) {
-    let match = /^\.([A-Za-z_$][\w$]*)/.exec(rest);
+    // Anything that is not a structural character is a field name. `\w` is
+    // ASCII-only in JavaScript, and the responses this product checks are keyed in
+    // Chinese, so `$.data.items[0].机构` has to parse as well as `$.data.items[0]`.
+    let match = /^\.([^\s.[\]$]+)/.exec(rest);
     if (match) { parts.push(match[1]); rest = rest.slice(match[0].length); continue; }
     match = /^\[(0|[1-9]\d*)\]/.exec(rest);
     if (match) { parts.push(match[1]); rest = rest.slice(match[0].length); continue; }
@@ -13,8 +16,39 @@ export function readPath(value, path) {
     if (match) { parts.push(JSON.parse(match[1])); rest = rest.slice(match[0].length); continue; }
     throw Error('路径仅支持字段、数组下标和双引号键名');
   }
-  for (const key of parts) {
+  return parts;
+}
+
+export function readPath(value, path) {
+  for (const key of pathParts(path)) {
     if (value === null || typeof value !== 'object' || !Object.prototype.hasOwnProperty.call(value, key)) return { exists: false };
+    value = value[key];
+  }
+  return { exists: true, value };
+}
+
+/// Same grammar, but a miss says what was actually there. `$.data.token not found`
+/// leaves a caller guessing whether the shape changed, the request failed, or the
+/// path was simply wrong; naming the segment that broke and listing its siblings
+/// answers all three without another round trip.
+export function probePath(value, path) {
+  const parts = pathParts(path);
+  const walked = [];
+  for (const key of parts) {
+    if (value === null || typeof value !== 'object' || !Object.prototype.hasOwnProperty.call(value, key)) {
+      const isIndex = typeof key === 'number' || /^\d+$/.test(String(key));
+      const available = value && typeof value === 'object'
+        ? Object.keys(value).slice(0, 40) : [];
+      return {
+        exists: false,
+        at: `$${walked.map(part => (typeof part === 'number' || /^\d+$/.test(String(part)) ? `[${part}]` : `.${part}`)).join('')}`,
+        missing: String(key),
+        isIndex,
+        available,
+        actualType: value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value,
+      };
+    }
+    walked.push(key);
     value = value[key];
   }
   return { exists: true, value };

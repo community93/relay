@@ -29,8 +29,8 @@ const results=[];const check=(name,ok,detail)=>{results.push({name,ok:!!ok});con
      so the boundary is tested directly rather than assumed from the happy path. */
   check('可执行连接回报权限与主机白名单',config.scope==='execute'&&Array.isArray(config.allowedHosts)&&config.allowedHosts.includes('127.0.0.1'),{scope:config.scope,hosts:config.allowedHosts});
   const listed=await call({action:'workspace.list'});
-  const aRequestId=listed.collections[0]?.requests[0]?.id;
-  check('workspace.list 只回报当前权限可达的 action',listed.scope==='execute'&&listed.actions.includes('request.execute')&&listed.actions.length===15,{actions:listed.actions});
+  const aRequestId=(await call({action:'workspace.list',collectionId:listed.collections[0].id})).requests[0]?.id;
+  check('workspace.list 只回报当前权限可达的 action',listed.scope==='execute'&&listed.actions.includes('request.execute')&&listed.actions.length===17,{actions:listed.actions});
   async function reopen(scope,allowedHosts){
     await page.evaluate(()=>window.__TAURI__.core.invoke('automation_stop'));
     config=await page.evaluate(async a=>window.__TAURI__.core.invoke('automation_start',{scope:a.scope,allowedHosts:a.allowedHosts}),{scope,allowedHosts});
@@ -64,7 +64,7 @@ const results=[];const check=(name,ok,detail)=>{results.push({name,ok:!!ok});con
   check('MCP initialize 报协议版本与权限',init.status===200&&init.data?.protocolVersion==='2025-03-26'&&init.data?.serverInfo?.name==='Relay'&&/scope "execute"/.test(init.data?.instructions||''),init);
   check('MCP 不认识的协议版本回落到最新实现',(await call2('initialize',{protocolVersion:'2099-01-01',capabilities:{},clientInfo:{name:'e2e',version:'1'}})).data?.protocolVersion==='2025-06-18');
   const listedTools=(await call2('tools/list',{})).data?.tools||[];
-  check('可执行连接下 MCP 工具表完整且名字不含点',listedTools.length===15&&listedTools.every(t=>/^[a-z0-9_]+$/.test(t.name)&&t.inputSchema&&t.description),listedTools.map(t=>t.name));
+  check('可执行连接下 MCP 工具表完整且名字不含点',listedTools.length===17&&listedTools.every(t=>/^[a-z0-9_]+$/.test(t.name)&&t.inputSchema&&t.description),listedTools.map(t=>t.name));
   check('MCP 工具表不暴露内部动作',!listedTools.some(t=>t.name==='mcp_tools'),listedTools.map(t=>t.name));
   const ping=await call2('ping',{});check('MCP ping 可用',ping.status===200&&ping.body?.result!==undefined,ping);
   // A notification carries no id, so the answer must be an empty 202. Replying with a
@@ -77,7 +77,7 @@ const results=[];const check=(name,ok,detail)=>{results.push({name,ok:!!ok});con
   check('MCP 未鉴权返回401',(await rpc('tools/list',{},{Authorization:''})).status===401);
   await reopen('read',[]);
   const readOnly=(await call2('tools/list',{})).data?.tools||[];
-  check('只读连接的MCP只给读工具',readOnly.length===3&&readOnly.map(t=>t.name).sort().join()==='entity_get,job_get,workspace_list',readOnly.map(t=>t.name));
+  check('只读连接的MCP只给读工具',readOnly.length===4&&readOnly.map(t=>t.name).sort().join()==='entity_find,entity_get,job_get,workspace_list',readOnly.map(t=>t.name));
   const crossed=await call2('tools/call',{name:'request_execute',arguments:{id:aRequestId}});
   // The refusal must come back as a tool result the model can read, not a transport
   // error it will retry or a hard JSON-RPC failure it will swallow.
@@ -191,6 +191,80 @@ const results=[];const check=(name,ok,detail)=>{results.push({name,ok:!!ok});con
   const failedDoc=await call({action:'entity.get',type:'document',id:'ai-delivery'});check('验证失败保留上次样例且取消交付状态',failedDoc.entity.blocks[0].verified.at===beforeFailed&&failedDoc.endpoints[0].status.kind==='failed'&&!failedDoc.entity.blocks[0].contract.reviewed);
   const duplicate=await runClient(['export','--id','ai-delivery','--format','html','--output',output]);check('客户端避免意外覆盖文件',duplicate.status!==0);
   await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.getByRole('button',{name:'AI 连接',exact:true}).click();await page.waitForSelector('.ai-connection-state.connected');await page.waitForTimeout(300);await page.screenshot({path:`${SHOTS}/connection-dark.png`});
+  /* ---- convergence ----
+     These exist because the old shape cost an agent a whole-workspace dump before it
+     could do anything, and a wrong json path cost a real execution to discover. */
+  await reopen('execute',['127.0.0.1','localhost']);
+  const index=await call({action:'workspace.list'});
+  check('工作区索引只给计数不给请求明细',index.apiVersion===3&&index.collections.length>=2&&index.collections.every(c=>typeof c.requests==='number')&&index.totalRequests>=8,index.collections[0]);
+  check('索引仍回报权限并指向更窄的读法',typeof index.scope==='string'&&Array.isArray(index.environments)&&Array.isArray(index.runners)&&/entity\.find/.test(index.next||''),index.next);
+  const target=index.collections.find(c=>c.requests>=3)||index.collections[0];
+  const expanded=await call({action:'workspace.list',collectionId:target.id});
+  check('指定 collectionId 才展开该集合的请求',Array.isArray(expanded.requests)&&expanded.requests.length===target.requests&&expanded.requests.every(r=>r.id&&r.revision&&r.name),expanded.requests?.[0]);
+  const paged=await call({action:'workspace.list',collectionId:target.id,limit:1});
+  check('limit 生效并说明还有多少没给',paged.requests.length===1&&paged.hidden===target.requests-1&&/raise limit/.test(paged.next||''),{shown:paged.requests.length,hidden:paged.hidden});
+  check('越界的 limit 被拒绝并说明范围',(await raw({action:'workspace.list',limit:9999})).error.message.includes('1 to 500'));
+  const found=await call({action:'entity.find',query:'projects'});
+  check('entity.find 按 URL 片段命中并给出所属集合',found.matches.some(m=>m.id==='ai-project'&&m.collectionId&&m.revision&&m.method),found.matches);
+  const byName=await call({action:'entity.find',query:'项目'});
+  check('entity.find 也按名称命中',byName.matches.some(m=>m.id==='ai-project'),byName.matches);
+  const byMethod=await call({action:'entity.find',method:'POST'});
+  check('entity.find 可按方法过滤且命中项方法一致',byMethod.matches.length>=1&&byMethod.matches.every(m=>m.method==='POST'),byMethod.matches);
+  check('entity.find 什么都不给时要求给条件',(await raw({action:'entity.find'})).error.code==='invalid');
+  check('entity.find 的命中数被 limit 收住且有说明',(await call({action:'entity.find',query:'e',limit:1})).next!==undefined);
+  // Preview needs real evidence, so run the sample once before auditing it cold.
+  await call({action:'request.upsert',id:'ai-preview',collectionId:target.id,data:{name:'预览路径校验',draft:{method:'GET',url:'http://127.0.0.1:8899/list',checks:[{kind:'json',operator:'exists',path:'$.data.items'},{kind:'json',operator:'equals',path:'$.data.nope',expected:'x'},{kind:'json',operator:'exists',path:'$..bad'}],extractors:[{name:'first',source:'json',path:'$.data.items[0].机构'},{name:'ghost',source:'json',path:'$.data.ghost'}]}}});
+  const ran=await wait((await call({action:'request.execute',id:'ai-preview'})).jobId);
+  check('预览样本已真实执行过一次',ran.result?.response?.status===200,ran);
+  const dryRun=await call({action:'request.preview',id:'ai-preview'});
+  check('预览回显解析后的方法、地址与环境',dryRun.wire.method==='GET'&&dryRun.wire.url.includes('/list')&&typeof dryRun.environment==='string',dryRun);
+  check('预览判定存在的路径通过',dryRun.checks.some(c=>c.path==='$.data.items'&&c.status==='ok'),dryRun.checks);
+  check('预览对不存在的路径列出同层键名',dryRun.checks.some(c=>c.path==='$.data.nope'&&c.status==='not-found'&&/items/.test(c.reason)&&/total/.test(c.reason)),dryRun.checks);
+  check('预览拒绝非法路径语法',dryRun.checks.some(c=>c.status==='bad-path'),dryRun.checks);
+  check('预览同样校验提取器路径',dryRun.extractors.some(e=>e.path==='$.data.items[0].机构'&&e.status==='ok')&&dryRun.extractors.some(e=>e.path==='$.data.ghost'&&e.status==='not-found'),dryRun.extractors);
+  check('预览汇总问题条数',dryRun.problems===3&&dryRun.ok===false,{problems:dryRun.problems,checks:dryRun.checks.length,extractors:dryRun.extractors.length});
+  // Nothing leaves the machine, so the allowlist must not gate a preview. The host is
+  // one an execute would refuse, which is what makes this a proof rather than a pass.
+  await call({action:'request.upsert',id:'ai-offpreview',collectionId:target.id,data:{name:'白名单外预览',draft:{method:'GET',url:'https://api.off-list.test/health'}}});
+  check('白名单外主机不能执行',(await raw({action:'request.execute',id:'ai-offpreview'})).error.code==='scope');
+  const offListPreview=await call({action:'request.preview',id:'ai-offpreview'});
+  check('预览不发流量：白名单外主机也能预览',offListPreview.wire.url.includes('off-list.test')&&offListPreview.ok===true,offListPreview.wire);
+  const previewRevision=await call({action:'entity.get',type:'request',id:'ai-preview'});
+  await call({action:'request.upsert',id:'ai-preview',collectionId:target.id,expectedRevision:previewRevision.revision,data:{name:'预览缺变量',draft:{method:'GET',url:'http://127.0.0.1:8899/echo?token={{preview-token}}',checks:[],extractors:[]}}});
+  const unresolved=await call({action:'request.preview',id:'ai-preview'});
+  check('预览列出解析不出来的变量并给出下一步',unresolved.missingVariables.includes('preview-token')&&/define preview-token/.test(unresolved.next||'')&&unresolved.ok===false,unresolved);
+  const batched=await call({commands:[
+    {action:'collection.upsert',id:'ai-batch',data:{name:'批量创建'}},
+    {action:'request.upsert',id:'ai-b1',collectionId:'ai-batch',data:{name:'一条',draft:{method:'GET',url:'http://127.0.0.1:8899/hello'}}},
+    {action:'request.upsert',id:'ai-b2',collectionId:'ai-batch',data:{name:'二条',draft:{method:'POST',url:'http://127.0.0.1:8899/echo'}}},
+  ]});
+  check('一次提交可建多条且逐条回报',batched.ok===true&&batched.results.length===3&&batched.results.every(r=>r.ok===true)&&batched.failed===0,batched);
+  check('批量里每条都有序号与结果',batched.results[1].data.entity.id==='ai-b1'&&batched.results[2].data.entity.id==='ai-b2',batched.results[1]);
+  const mixed=await call({commands:[
+    {action:'request.upsert',id:'ai-b3',collectionId:'ai-batch',data:{name:'三条',draft:{method:'GET',url:'http://127.0.0.1:8899/hello'}}},
+    {action:'request.upsert',id:'ai-b4',collectionId:'ai-batch',data:{name:'坏请求',draft:{method:'G E T',url:'http://127.0.0.1:8899/hello'}}},
+  ]});
+  check('批量里坏的一条不挡其他条',mixed.ok===false&&mixed.failed===1&&mixed.results[0].ok===true&&mixed.results[1].ok===false,mixed.results);
+  check('坏的一条给出可自行纠正的原因',/HTTP verb/.test(mixed.results[1].error.message)&&mixed.results[1].index===1,mixed.results[1]);
+  check('批量与单命令不能混在一起',(await raw({action:'workspace.list',commands:[{action:'workspace.list'}]})).status===400);
+  check('批量不能嵌套',(await raw({commands:[{commands:[{action:'workspace.list'}]}]})).error.message.includes('nest'));
+  await reopen('read',[]);
+  const smuggled=await raw({commands:[{action:'workspace.list'},{action:'request.upsert',id:'ai-smuggled',collectionId:'ai-batch',data:{name:'越权写入'}}]});
+  check('批量里夹带越权写入按整批拒绝',smuggled.status===403&&smuggled.error.code==='insufficient_scope'&&/commands\[1\] request.upsert/.test(smuggled.error.message),smuggled);
+  // The reads in that batch would have succeeded, so "nothing ran" is only proven by
+  // the write being absent.
+  check('被拒的批量一条都没执行',(await raw({action:'entity.get',type:'request',id:'ai-smuggled'})).status===404);
+  await reopen('execute',['127.0.0.1','localhost']);
+  const unknownField=await raw({action:'request.upsert',collectionId:'ai-batch',data:{name:'x',draft:{url:'http://127.0.0.1:8899',widget:true}}});
+  check('未知字段报错列出允许键',unknownField.error.message.includes('allowed:')&&/widget/.test(unknownField.error.message),unknownField);
+  const badEnum=await raw({action:'request.upsert',collectionId:'ai-batch',data:{name:'x',protocol:'grpc',draft:{url:'http://127.0.0.1:8899'}}});
+  check('枚举报错列出可取值',/expected one of "http", "sse", "ws"/.test(badEnum.error.message),badEnum);
+  const badKind=await raw({action:'request.upsert',collectionId:'ai-batch',data:{name:'x',draft:{url:'http://127.0.0.1:8899',checks:[{kind:'header',operator:'equals'}]}}});
+  check('检查规则报错指明第几条哪个字段',/checks\[0\]\.kind/.test(badKind.error.message),badKind);
+  const badId=await raw({action:'entity.get',type:'request',id:'ai/bad id'});
+  check('非法 id 说明字符集规则',/a-z A-Z 0-9/.test(badId.error.message),badId);
+  const badType=await raw({action:'entity.get',type:'collectionx',id:'ai-batch'});
+  check('未知实体类型列出可取值',/is not an entity/.test(badType.error.message),badType);
   await page.getByRole('button',{name:'断开',exact:true}).click();check('断开后旧端口不可访问',await fetch(config.baseUrl+'/v1/health',{headers}).then(()=>false).catch(()=>true));
   await page.getByRole('button',{name:'开启 AI 连接',exact:true}).click();const next=await page.evaluate(()=>window.__TAURI__.core.invoke('automation_status'));check('重启连接轮换token和实例',next.token!==config.token&&next.instanceId!==config.instanceId);
   const old=await fetch(next.baseUrl+'/v1/health',{headers}).then(r=>r.status);check('旧token无法访问新连接',old===401);

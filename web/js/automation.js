@@ -1,6 +1,6 @@
 import { state, uid, kv, newBody, newAuth, newCollection, newRequestNode, newDoc, newReqBlock, newEnvironment, newRunner, findNode, touch, flushDomain, saveState, emit, buildSendDraft, openRequest, openDoc, openRunner, activeEnv, splitQuery, syncParamsFromUrl, syncUrlFromParams } from './state.js';
 import * as api from './api.js';
-import { evaluateChecks } from './checks.js';
+import { evaluateChecks, probePath, valueType } from './checks.js';
 import { requestSnapshot, requestCurl } from './preview.js';
 import { contractOf, clone, scrub, safeResponse, endpointFields, endpointStatus, reviewIssues, deliveryMarkdown, deliveryOpenApi, SECRET_KEY } from './delivery.js';
 import { deliveryHtml, runBlock, cancelBlock } from './doc.js';
@@ -8,15 +8,16 @@ import { runRunner, stopRunner, sessionOf, stepsOf } from './runner.js';
 import { inferProtocol } from './protocol.js';
 import { el, icon, modal, toast, copy, saveAs, segmented } from './ui.js';
 
-const actions = ['workspace.list','entity.get','collection.upsert','environment.upsert','request.upsert','document.upsert','document.endpoint.upsert','runner.upsert','request.execute','document.verify','runner.execute','job.get','job.cancel','document.export','entity.open'];
+const actions = ['workspace.list','entity.find','entity.get','collection.upsert','environment.upsert','request.upsert','document.upsert','document.endpoint.upsert','runner.upsert','request.execute','document.verify','runner.execute','job.get','job.cancel','document.export','entity.open','request.preview'];
 /// Mirrors `action_tier`/`scope_tier` in src-tauri/src/automation.rs. The Rust test
 /// `every_frontend_action_is_graded` fails the build if the two drift apart.
 /// `mcp.tools` is graded too but kept out of `actions`, so it never shows up in the
 /// list an agent is invited to call -- it exists only to answer MCP `tools/list`.
 const ACTION_TIER = {
-  'workspace.list': 0, 'entity.get': 0, 'job.get': 0, 'mcp.tools': 0,
+  'workspace.list': 0, 'entity.find': 0, 'entity.get': 0, 'job.get': 0, 'mcp.tools': 0,
   'collection.upsert': 1, 'environment.upsert': 1, 'request.upsert': 1, 'document.upsert': 1,
   'document.endpoint.upsert': 1, 'runner.upsert': 1, 'entity.open': 1, 'document.export': 1,
+  'request.preview': 1,
   'request.execute': 2, 'document.verify': 2, 'runner.execute': 2, 'job.cancel': 2,
 };
 const SCOPE_TIER = { read: 0, write: 1, execute: 2 };
@@ -45,7 +46,9 @@ const DRAFT = {
 const AUTH = { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['inherit', 'noauth', 'bearer', 'basic', 'apikey'] }, bearer: { type: 'object', additionalProperties: false, properties: { token: { type: 'string' } }, required: ['token'] }, basic: { type: 'object', additionalProperties: false, properties: { username: { type: 'string' }, password: { type: 'string' } } }, apikey: { type: 'object', additionalProperties: false, properties: { key: { type: 'string' }, value: { type: 'string' }, addTo: { type: 'string', enum: ['query', 'header'] } } } }, required: ['kind'] };
 const JOB_ID = { ...ID, description: 'Job id returned by an execute call' };
 const TOOL_SPECS = {
-  'workspace.list': { title: 'Read the workspace', description: 'Every collection with its requests, every environment, document and runner, plus this connection\'s scope and allowed hosts. Call this first; it gives the ids and revisions the writes need.', inputSchema: { type: 'object', additionalProperties: false, properties: {} } },
+  'workspace.list': { title: 'Read the workspace map', description: 'A bounded map, not a dump: every collection with its request count, every environment, document and runner, plus this connection\'s scope and allowed hosts. Call this first. Individual requests are NOT listed here — pass collectionId to expand one collection, or use entity.find to search. Always prefer a narrow read over a wide one.', inputSchema: { type: 'object', additionalProperties: false, properties: { collectionId: ID, limit: { type: 'integer', minimum: 1, maximum: 500, description: 'How many entries to return; defaults to 80' } } } },
+  'entity.find': { title: 'Search requests', description: 'Substring search over request names and URLs across every collection, optionally filtered by HTTP method. Returns id, method, url, which collection it lives in, and the revision a write needs. This is how you locate a request without reading the whole workspace.', inputSchema: { type: 'object', additionalProperties: false, properties: { query: { type: 'string', description: 'Matched case-insensitively against the request name and URL' }, method: { type: 'string', description: 'HTTP verb to filter by, e.g. POST' }, limit: { type: 'integer', minimum: 1, maximum: 500 } } } },
+  'request.preview': { title: 'Preview a request (no traffic)', description: 'Resolve variables, auth and collection defaults through the same pipeline a real send uses and show what would go on the wire, WITHOUT sending anything. Also checks every json path in the checks and extractors against the last real response and reports the sibling keys where a path broke. Use this before request.execute: a wrong path costs an execution and an allowlist hit, a preview costs neither. Secrets are masked.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID }, required: ['id'] } },
   'entity.get': { title: 'Read one entity', description: 'Full saved content of one collection, request, environment, document or runner, with its revision.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID, type: ENTITY_TYPE }, required: ['id', 'type'] } },
   'entity.open': { title: 'Show an entity to the user', description: 'Opens the entity in Relay\'s window so the person can see what you are working on.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID, type: { ...ENTITY_TYPE, enum: ['request', 'document', 'runner'] } }, required: ['id', 'type'] } },
   'collection.upsert': { title: 'Create or update a collection', description: 'Omit id to create. Always send expectedRevision when updating.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID, expectedRevision: REVISION, data: { type: 'object', additionalProperties: false, properties: { name: { type: 'string' }, description: { type: 'string' } }, required: ['name'] } }, required: ['data'] } },
@@ -68,16 +71,28 @@ const toolName = action => action.replace(/\./g, '_');
 const jobs = new Map();
 let queue = Promise.resolve(), connected = false;
 const fail = (code, message) => { throw Object.assign(Error(message), { code }); };
-const object = (value, label='data') => { if (!value || typeof value!=='object' || Array.isArray(value)) fail('invalid',`${label} must be an object`); return value; };
-const fields = (value, allowed) => { object(value); for(const key of Object.keys(value)) if(!allowed.includes(key)) fail('invalid',`Unknown field: ${key}`); return value; };
-const text = (value, label, max=10000) => { if(typeof value!=='string' || value.length>max) fail('invalid',`${label} must be a string (max ${max})`);return value; };
-const idOf = value => { if(value!==undefined && !/^[a-zA-Z0-9_-]{1,80}$/.test(value)) fail('invalid','Invalid id'); return value; };
-const nameOf = value => { const name=text(value,'name',200).trim();if(!name)fail('invalid','Name is required');return name; };
+/// A rejection has to be enough to fix the command without another round trip, so
+/// every one of them names what was accepted and echoes back what arrived. The
+/// caller sent the value, so echoing is not a leak; it is truncated only to keep a
+/// megabyte of base64 out of the error text.
+const echo = value => {
+  const raw = value === undefined ? 'undefined' : (typeof value === 'string' ? value : JSON.stringify(value) ?? String(value));
+  return raw.length > 60 ? `${raw.slice(0, 57)}… (${raw.length} chars)` : raw;
+};
+const oneOf = values => `expected one of ${values.map(value => JSON.stringify(value)).join(', ')}`;
+const choice = (value, allowed, label) => { if (!allowed.includes(value)) fail('invalid', `${label} ${echo(value)} is not supported; ${oneOf(allowed)}`); return value; };
+const object = (value, label='data') => { if (!value || typeof value!=='object' || Array.isArray(value)) fail('invalid',`${label} must be an object, got ${echo(value)}`); return value; };
+const fields = (value, allowed) => { object(value); const extra = Object.keys(value).filter(key => !allowed.includes(key)); if (extra.length) fail('invalid',`Unknown field(s) ${extra.map(key => JSON.stringify(key)).join(', ')}; allowed: ${allowed.join(', ')}`); return value; };
+const text = (value, label, max=10000) => { if(typeof value!=='string') fail('invalid',`${label} must be a string, got ${echo(value)}`); if(value.length>max) fail('invalid',`${label} is ${value.length} characters, over the ${max} limit`); return value; };
+const idOf = value => { if(value!==undefined && !/^[a-zA-Z0-9_-]{1,80}$/.test(value)) fail('invalid',`ids are 1-80 characters from a-z A-Z 0-9 _ - with no dots, slashes or spaces, got ${echo(value)}`); return value; };
+const nameOf = value => { const name=text(value,'name',200).trim();if(!name)fail('invalid','Name is required and cannot be only whitespace');return name; };
+const ENTITY_TYPES = ['collection','request','environment','document','runner'];
 function entity(type,id) {
+  if (!ENTITY_TYPES.includes(type)) fail('invalid', `type ${echo(type)} is not an entity; ${oneOf(ENTITY_TYPES)}`);
   let value;
   if(['collection','request'].includes(type))value=findNode(id)?.node;
   else value=state[{environment:'environments',document:'docs',runner:'runners'}[type]]?.find(item=>item.id===id);
-  if(!value || type==='collection'&&value.kind!=='collection' || type==='request'&&!['request','ws'].includes(value.kind))fail('not_found','Entity not found');
+  if(!value || type==='collection'&&value.kind!=='collection' || type==='request'&&!['request','ws'].includes(value.kind))fail('not_found',`No ${type} with id ${echo(id)}; run workspace.list or entity.find to get current ids`);
   return value;
 }
 export function revision(value) {
@@ -132,6 +147,82 @@ async function requireHosts(urls, what) {
   // only this first URL would let an allowlisted host bounce us anywhere.
   return allowed;
 }
+/// The response a preview can check paths against. Only a real execution leaves one
+/// behind, so this looks at the open tab first and then at any document endpoint that
+/// links the request; when there is none it says so rather than guessing a shape.
+function evidenceFor(requestId) {
+  const tab = state.tabs.find(t => t.refId === requestId && t.response?.status && !t.dirty);
+  if (tab) return { response: tab.response, at: tab.lastRequestSnapshot?.at || null, from: 'the open tab' };
+  for (const doc of state.docs) for (const block of doc.blocks) {
+    if (block.sourceId === requestId && block.response?.status) {
+      return { response: block.response, at: block.lastRequestSnapshot?.at || null, from: `document “${doc.name}”` };
+    }
+  }
+  return null;
+}
+
+/// Check every JSON path against the last real response without sending anything.
+/// The point is to turn "run it and find out" into an answer the caller can act on
+/// now, so a miss names the segment that broke and lists what sits beside it.
+function auditPaths(rules, evidence, label) {
+  if (!rules?.length) return [];
+  if (!evidence) return rules.map(rule => ({ ...ruleRef(rule, label), status: 'unchecked', reason: 'no stored response to check against; run request.execute once, or open the request in Relay and send it' }));
+  let parsed;
+  try {
+    if (evidence.response.truncated || evidence.response.isText === false) throw Error('stored response is truncated or binary');
+    parsed = JSON.parse(evidence.response.bodyText || '');
+  } catch (error) {
+    return rules.map(rule => ({ ...ruleRef(rule, label), status: 'unchecked', reason: `stored response is not JSON: ${error.message}` }));
+  }
+  return rules.map(rule => {
+    const ref = ruleRef(rule, label);
+    if (!rule.path) return { ...ref, status: 'missing-path', reason: `${label} has no path` };
+    let probed;
+    try { probed = probePath(parsed, rule.path); }
+    catch (error) { return { ...ref, status: 'bad-path', reason: `${error.message} (path ${echo(rule.path)})` }; }
+    if (!probed.exists) {
+      const where = probed.at || '$';
+      const siblings = probed.available.length
+        ? `${probed.isIndex ? 'elements' : 'keys'} at ${where}: ${probed.available.join(', ')}`
+        : `${where} is ${probed.actualType}, which has no children`;
+      return { ...ref, status: 'not-found', path: rule.path, reason: `${rule.path} not found — ${siblings}` };
+    }
+    const actual = valueType(probed.value);
+    if (rule.operator === 'type' && rule.expected && rule.expected !== actual) {
+      return { ...ref, status: 'would-fail', reason: `${rule.path} is ${actual}, check expects type ${rule.expected}` };
+    }
+    if (rule.operator === 'equals' && rule.expected !== undefined && String(probed.value) !== String(rule.expected)) {
+      return { ...ref, status: 'would-fail', reason: `${rule.path} is ${echo(probed.value)}, check expects ${echo(rule.expected)}` };
+    }
+    return { ...ref, status: 'ok', actualType: actual, value: redacted(probed.value, []) };
+  });
+}
+const ruleRef = (rule, label) => ({ [label === 'check' ? 'operator' : 'name']: rule[label === 'check' ? 'operator' : 'name'] ?? null, path: rule.path ?? null });
+
+function previewRequest(command) {
+  fields(command.data ?? {}, []);
+  const node = entity('request', command.id);
+  const shell = { refId: node.id, draft: clone(node.request), auth: clone(node.auth), protocol: node.protocol || 'http' };
+  const built = buildSendDraft(shell, { environment: activeEnv() ? clone(activeEnv()) : null });
+  const snapshot = requestSnapshot(shell, built);
+  const evidence = evidenceFor(node.id);
+  const checks = auditPaths((built.preparedChecks?.checks || []).filter(rule => rule.kind === 'json'), evidence, 'check');
+  const extractors = auditPaths(built.preparedChecks?.extractors || [], evidence, 'extractor');
+  const problems = [...checks, ...extractors].filter(row => row.status !== 'ok' && row.status !== 'unchecked').length;
+  return {
+    id: node.id, name: node.name, protocol: node.protocol || 'http', environment: built.environment,
+    // Nothing leaves the machine here, but the resolved request still carries real
+    // credentials, so it goes through the same redaction an execution result does.
+    wire: redacted({ method: built.draft.method, url: built.draft.url, headers: built.draft.headers,
+      params: built.draft.params, body: built.draft.body, authKind: built.auth?.kind || 'inherit' }, snapshot.secrets),
+    missingVariables: built.missing,
+    evidence: evidence ? { from: evidence.from, at: evidence.at, status: evidence.response.status } : null,
+    checks, extractors, problems,
+    ok: built.missing.length === 0 && problems === 0,
+    ...(built.missing.length ? { next: `define ${built.missing.join(', ')} in the active environment, or the placeholders go out as-is` } : {}),
+  };
+}
+
 function parsedDraft(draft) {
   const out=clone(draft);
   if(!out.name)delete out.name;
@@ -144,29 +235,30 @@ function parsedDraft(draft) {
   return draftPatch(out);
 }
 function rows(value,label='rows') {
-  if(!Array.isArray(value)||value.length>300)fail('invalid',`${label} must contain at most 300 rows`);
-  return value.map(row=>{fields(row,['key','value','enabled','description']);const key=text(row.key,'key',500),val=text(row.value??'','value',65536);if(val.includes('<redacted>'))fail('invalid','Do not write redaction placeholders');return {...kv(key,val,text(row.description??'','description')),enabled:row.enabled!==false};});
+  if(!Array.isArray(value))fail('invalid',`${label} must be an array of {key, value} objects, got ${echo(value)}`);
+  if(value.length>300)fail('invalid',`${label} has ${value.length} rows, over the 300 limit`);
+  return value.map((row,index)=>{try{fields(row,['key','value','enabled','description']);}catch(error){fail(error.code,`${label}[${index}]: ${error.message}`);}const key=text(row.key,`${label}[${index}].key`,500),val=text(row.value??'',`${label}[${index}].value`,65536);if(val.includes('<redacted>'))fail('invalid',`${label}[${index}].value contains a <redacted> placeholder; read the environment for the real value instead of writing the mask back`);return {...kv(key,val,text(row.description??'',`${label}[${index}].description`)),enabled:row.enabled!==false};});
 }
 function draftPatch(value) {
   fields(value,['name','method','url','params','headers','body','settings','checks','extractors','subprotocols']);
   const draft=clone(value);
   if('name'in draft)draft.name=nameOf(draft.name);
-  if('method'in draft && !/^[A-Z]{1,20}$/.test(draft.method))fail('invalid','Invalid HTTP method');
-  if('url'in draft){text(draft.url,'url',16384);if(!draft.url.trim()||draft.url.includes('<redacted>'))fail('invalid','Invalid URL');}
-  for(const key of ['params','headers'])if(key in draft)draft[key]=rows(draft[key]);
-  if('body'in draft){const body=fields(draft.body,['mode','raw','urlencoded','form']);if(!['none','raw','urlencoded','form'].includes(body.mode))fail('invalid','Local file bodies are configured in Relay');const out=newBody(body.mode);if(body.mode==='raw'){fields(body.raw,['language','content']);if(!['json','text','xml','html','javascript'].includes(body.raw.language))fail('invalid','Unsupported body language');out.raw={language:body.raw.language,content:text(body.raw.content,'body',1048576)};}for(const key of ['urlencoded','form'])if(key in body)out[key]=rows(body[key]);draft.body=out;}
-  if('settings'in draft){fields(draft.settings,['timeoutMs','followRedirects','sslVerify','cookieJar','proxy','maxRedirects']);if(draft.settings.timeoutMs!==undefined&&(!Number.isFinite(draft.settings.timeoutMs)||draft.settings.timeoutMs<0||draft.settings.timeoutMs>300000))fail('invalid','timeoutMs: 0–300000');for(const key of ['followRedirects','sslVerify','cookieJar'])if(key in draft.settings&&typeof draft.settings[key]!=='boolean')fail('invalid',`${key} must be boolean`);if(draft.settings.proxy!=null)text(draft.settings.proxy,'proxy',2000);}
-  if('checks'in draft){if(!Array.isArray(draft.checks)||draft.checks.length>100)fail('invalid','At most 100 checks');for(const rule of draft.checks){fields(rule,['kind','operator','path','expected','enabled']);if(!['status','time','json'].includes(rule.kind))fail('invalid','Invalid check kind');if(rule.kind==='json'&&!['exists','equals','type'].includes(rule.operator))fail('invalid','Invalid JSON operator');if(rule.path!==undefined)text(rule.path,'path',2000);if(rule.expected!==undefined)text(rule.expected,'expected',65536);}}
-  if('extractors'in draft){if(!Array.isArray(draft.extractors)||draft.extractors.length>100)fail('invalid','At most 100 extractors');for(const rule of draft.extractors){fields(rule,['name','path','source','header','enabled']);nameOf(rule.name);if(rule.path!==undefined)text(rule.path,'path',2000);if(rule.source!==undefined&&!['json','header'].includes(rule.source))fail('invalid','Invalid extraction source');if(rule.header!==undefined)text(rule.header,'header',500);}}
-  if('subprotocols'in draft&&(!Array.isArray(draft.subprotocols)||draft.subprotocols.some(v=>typeof v!=='string')))fail('invalid','Invalid subprotocols');
+  if('method'in draft && !/^[A-Z]{1,20}$/.test(draft.method))fail('invalid',`method ${echo(draft.method)} is not an HTTP verb; use uppercase letters only, e.g. "GET", "POST", "PATCH"`);
+  if('url'in draft){text(draft.url,'url',16384);if(!draft.url.trim())fail('invalid','url cannot be blank');if(draft.url.includes('<redacted>'))fail('invalid','url contains a <redacted> placeholder; put the secret in an environment variable and reference it with {{name}}');}
+  for(const key of ['params','headers'])if(key in draft)draft[key]=rows(draft[key],key);
+  if('body'in draft){const body=fields(draft.body,['mode','raw','urlencoded','form']);if(!['none','raw','urlencoded','form'].includes(body.mode))fail('invalid',`body.mode ${echo(body.mode)} is not supported; ${oneOf(['none','raw','urlencoded','form'])}. A binary file body is configured in Relay's UI, not through automation`);const out=newBody(body.mode);if(body.mode==='raw'){fields(body.raw,['language','content']);choice(body.raw?.language,['json','text','xml','html','javascript'],'body.raw.language');out.raw={language:body.raw.language,content:text(body.raw.content,'body',1048576)};}for(const key of ['urlencoded','form'])if(key in body)out[key]=rows(body[key],`body.${key}`);draft.body=out;}
+  if('settings'in draft){fields(draft.settings,['timeoutMs','followRedirects','sslVerify','cookieJar','proxy','maxRedirects']);if(draft.settings.timeoutMs!==undefined&&(!Number.isFinite(draft.settings.timeoutMs)||draft.settings.timeoutMs<0||draft.settings.timeoutMs>300000))fail('invalid',`settings.timeoutMs must be a number of milliseconds from 0 to 300000, got ${echo(draft.settings.timeoutMs)}`);for(const key of ['followRedirects','sslVerify','cookieJar'])if(key in draft.settings&&typeof draft.settings[key]!=='boolean')fail('invalid',`settings.${key} must be true or false, got ${echo(draft.settings[key])}`);if(draft.settings.proxy!=null)text(draft.settings.proxy,'settings.proxy',2000);}
+  if('checks'in draft){if(!Array.isArray(draft.checks)||draft.checks.length>100)fail('invalid',`checks must be an array of at most 100 rules, got ${Array.isArray(draft.checks)?`${draft.checks.length} rows`:echo(draft.checks)}`);for(const [index,rule] of draft.checks.entries()){try{fields(rule,['kind','operator','path','expected','enabled']);}catch(error){fail(error.code,`checks[${index}]: ${error.message}`);}choice(rule.kind,['status','time','json'],`checks[${index}].kind`);if(rule.kind==='json')choice(rule.operator,['exists','equals','type'],`checks[${index}].operator (required for a json check)`);if(rule.path!==undefined)text(rule.path,`checks[${index}].path`,2000);if(rule.expected!==undefined)text(rule.expected,`checks[${index}].expected`,65536);}}
+  if('extractors'in draft){if(!Array.isArray(draft.extractors)||draft.extractors.length>100)fail('invalid',`extractors must be an array of at most 100 rules, got ${Array.isArray(draft.extractors)?`${draft.extractors.length} rows`:echo(draft.extractors)}`);for(const [index,rule] of draft.extractors.entries()){try{fields(rule,['name','path','source','header','enabled']);}catch(error){fail(error.code,`extractors[${index}]: ${error.message}`);}nameOf(rule.name);if(rule.path!==undefined)text(rule.path,`extractors[${index}].path`,2000);if(rule.source!==undefined)choice(rule.source,['json','header'],`extractors[${index}].source`);if(rule.header!==undefined)text(rule.header,`extractors[${index}].header`,500);}}
+  if('subprotocols'in draft&&(!Array.isArray(draft.subprotocols)||draft.subprotocols.some(v=>typeof v!=='string')))fail('invalid',`subprotocols must be an array of strings, got ${echo(draft.subprotocols)}`);
   return draft;
 }
 function authPatch(value) {
   fields(value,['kind','bearer','basic','apikey']);
-  if(!['inherit','noauth','bearer','basic','apikey'].includes(value.kind))fail('invalid','Invalid auth');
+  choice(value.kind,['inherit','noauth','bearer','basic','apikey'],'auth.kind');
   const auth={...newAuth(),kind:value.kind};
-  for(const [key,allowed] of [['bearer',['token']],['basic',['username','password']],['apikey',['key','value','addTo']]])if(value[key]){fields(value[key],allowed);for(const [field,val]of Object.entries(value[key])){text(val,field,65536);if(val.includes('<redacted>'))fail('invalid','Do not write redaction placeholders');auth[key][field]=val;}}
-  if(!['query','header'].includes(auth.apikey.addTo))fail('invalid','Invalid API key location');return auth;
+  for(const [key,allowed] of [['bearer',['token']],['basic',['username','password']],['apikey',['key','value','addTo']]])if(value[key]){fields(value[key],allowed);for(const [field,val]of Object.entries(value[key])){text(val,`auth.${key}.${field}`,65536);if(val.includes('<redacted>'))fail('invalid',`auth.${key}.${field} contains a <redacted> placeholder; never write a mask back as a value`);auth[key][field]=val;}}
+  if(!['query','header'].includes(auth.apikey.addTo))fail('invalid',`auth.apikey.addTo ${echo(auth.apikey.addTo)} is not supported; ${oneOf(['query','header'])}`);return auth;
 }
 function normalizeQuery(draft, patch, creating) {
   if('params' in patch){
@@ -194,14 +286,31 @@ function jobStart(meta, execute, cancel) {
 }
 function jobView(job){const {cancel,...copy}=job;return redacted(copy,job._secrets||[]);}
 export async function dispatch(command) {
-  fields(command,['action','id','type','expectedRevision','data','collectionId','documentId','requestId','format']);
-  if (ACTION_TIER[command.action] === undefined) fail('invalid', 'Unknown action');
+  fields(command,['action','id','commands','type','expectedRevision','data','collectionId','documentId','requestId','format','limit','query','method']);
+  // Commands run in order and a failure does not stop the rest: the point of a batch
+  // is that "create these twelve requests" costs one round trip, and if the third one
+  // was malformed the caller should still get the other eleven plus a precise complaint
+  // about the third, not a rollback of everything.
+  if (command.commands) {
+    if (command.action !== undefined) fail('invalid','commands and action cannot appear together');
+    if (!Array.isArray(command.commands)) fail('invalid',`commands must be an array, got ${echo(command.commands)}`);
+    const results = [];
+    for (const [index, row] of command.commands.entries()) {
+      try { results.push({ index, ok: true, data: await dispatch(row) }); }
+      catch (error) { results.push({ index, ok: false, action: row?.action ?? null, error: { code: error.code || 'invalid', message: String(error.message || error) } }); }
+    }
+    const failed = results.filter(row => !row.ok).length;
+    return { results, failed, ok: failed === 0, ...(failed ? { next: 'fix only the failed index and resend that one command; the rest already applied' } : {}) };
+  }
+  if (ACTION_TIER[command.action] === undefined) fail('invalid', `Unknown action ${JSON.stringify(command.action)}; this connection can call: ${reachableActions((await api.invoke('automation_status'))?.scope||'read').join(', ')}`);
   for(const key of ['id','collectionId','documentId','requestId'])idOf(command[key]);
   const {action,id,data={}}=command;
   if(action==='mcp.tools'){return {tools:Object.entries(TOOL_SPECS).map(([action,spec])=>({action,name:toolName(action),...spec}))};}
-  if(action==='workspace.list'){const c=await api.invoke('automation_status');return {apiVersion:2,scope:c?.scope||'read',allowedHosts:c?.allowedHosts||[],actions:reachableActions(c?.scope||'read'),activeEnvironmentId:state.settings.activeEnvironmentId,collections:state.collections.map(c=>({id:c.id,name:c.name,revision:revision(c),requests:listRequests(c)})),environments:state.environments.map(e=>({id:e.id,name:e.name,revision:revision(e)})),documents:state.docs.map(d=>({id:d.id,name:d.name,revision:revision(d),endpoints:d.blocks.filter(b=>b.type==='req').map(b=>({id:b.id,sourceId:b.sourceId,status:endpointStatus(b)}))})),runners:state.runners.map(r=>({id:r.id,name:r.name,revision:revision(r)}))};}
+  if(action==='workspace.list'){const c=await api.invoke('automation_status');return {scope:c?.scope||'read',allowedHosts:c?.allowedHosts||[],actions:reachableActions(c?.scope||'read'),activeEnvironmentId:state.settings.activeEnvironmentId,...workspaceIndex(command)};}
+  if(action==='entity.find'){return findRequests(command);}
+  if(action==='request.preview'){return previewRequest(command);}
   if(action==='entity.get'){const value=entity(command.type,id);const result=resultEntity(value);if(command.type==='document')result.endpoints=value.blocks.filter(b=>b.type==='req').map(b=>({id:b.id,fields:redacted(endpointFields(b)),status:endpointStatus(b),issues:reviewIssues(b)}));return result;}
-  if(action==='entity.open'){const value=entity(command.type,id);if(command.type==='request'){openRequest(value);state.pane='collections';}else if(command.type==='document'){openDoc(value);state.pane='docs';}else if(command.type==='runner'){openRunner(value);state.pane='runner';}else fail('invalid','Open a request, document or runner');state.overviewPane=false;emit('pane');emit('rerender');return {opened:id};}
+  if(action==='entity.open'){const value=entity(command.type,id);if(command.type==='request'){openRequest(value);state.pane='collections';}else if(command.type==='document'){openDoc(value);state.pane='docs';}else if(command.type==='runner'){openRunner(value);state.pane='runner';}else fail('invalid',`entity.open takes a request, document or runner, not ${echo(command.type)}`);state.overviewPane=false;emit('pane');emit('rerender');return {opened:id};}
   if(action==='collection.upsert'){
     fields(data,['name','description']);const existing=id?findNode(id)?.node:null;if(existing&&existing.kind!=='collection')fail('invalid','Id belongs to another entity');checkRevision(existing,command.expectedRevision);
     const next={...(existing||newCollection())};if(id)next.id=id;next.name=nameOf(data.name??next.name);if('description'in data)next.description=text(data.description,'description');
@@ -213,10 +322,10 @@ export async function dispatch(command) {
   }
   if(action==='request.upsert'){
     fields(data,['name','description','draft','auth','protocol','curl']);const existing=id?findNode(id)?.node:null;if(existing&&!['request','ws'].includes(existing.kind))fail('invalid','Id belongs to another entity');checkRevision(existing,command.expectedRevision);if(existing)busyRequest(existing);
-    let parent=existing?findNode(existing.id).parent:entity('collection',command.collectionId);if(!parent?.children)fail('invalid','collectionId required');
+    let parent=existing?findNode(existing.id).parent:entity('collection',command.collectionId);if(!parent?.children)fail('invalid','A new request needs collectionId set to a collection id from workspace.list');
     let patch=data.draft?draftPatch(data.draft):{};
     if(data.curl){if(data.draft)fail('invalid','Use curl or draft');const parsed=await api.parseCurl(text(data.curl,'curl',1048576));if(parsed.length!==1)fail('invalid','One cURL per request');patch=parsedDraft(parsed[0].draft);if(existing&&findNode(id)?.node!==existing)fail('conflict','Request changed while parsing');checkRevision(existing,command.expectedRevision);if(existing)busyRequest(existing);parent=existing?findNode(existing.id).parent:entity('collection',command.collectionId);}
-    const next=clone(existing||newRequestNode());if(id)next.id=id;next.name=nameOf(data.name??patch.name??next.name);next.request=newRequestNode(next.name,{...next.request,...patch,name:next.name}).request;if(!next.request.url)fail('invalid','Request URL required');if(data.auth)next.auth=authPatch(data.auth);if('description'in data)next.description=text(data.description,'description');next.protocol=data.protocol??existing?.protocol??inferProtocol(next.request);if(!['http','sse','ws'].includes(next.protocol))fail('invalid','Invalid protocol');next.kind=next.protocol==='ws'?'ws':'request';
+    const next=clone(existing||newRequestNode());if(id)next.id=id;next.name=nameOf(data.name??patch.name??next.name);next.request=newRequestNode(next.name,{...next.request,...patch,name:next.name}).request;if(!next.request.url)fail('invalid','Request URL required');if(data.auth)next.auth=authPatch(data.auth);if('description'in data)next.description=text(data.description,'description');next.protocol=data.protocol??existing?.protocol??inferProtocol(next.request);choice(next.protocol,['http','sse','ws'],'protocol');next.kind=next.protocol==='ws'?'ws':'request';
     normalizeQuery(next.request,patch,!existing);
     const index=existing?parent.children.indexOf(existing):-1;
     await persist('collections',()=>index<0?parent.children.push(next):parent.children.splice(index,1,next),()=>index<0?parent.children.splice(parent.children.indexOf(next),1):parent.children.splice(index,1,existing));
@@ -233,7 +342,7 @@ export async function dispatch(command) {
     const node=entity('request',command.requestId);if(node.protocol!=='http')fail('unsupported','Delivery verification currently supports HTTP');busyRequest(node);
     const next=clone(doc);let block=next.blocks.find(b=>id?b.id===id:b.sourceId===node.id);if(block&&block.type!=='req')fail('conflict','Id belongs to a text block');if(block?.sourceId&&block.sourceId!==node.id)fail('conflict','Endpoint already links another request');if(!block){block=newReqBlock();if(id)block.id=id;next.blocks.push(block);}
     block.sourceId=node.id;block.draft=clone(node.request);block.auth=clone(node.auth);const contract=contractOf(block);for(const key of ['summary','description','notes'])if(key in data)contract[key]=text(data[key],key,65536);
-    if(data.fields){object(data.fields,'fields');const available=new Set(endpointFields(block).map(f=>f.id));for(const [key,meta]of Object.entries(data.fields)){if(!available.has(key))fail('invalid',`Unknown field ${key}; verify first for response fields`);fields(meta,['description','required']);if(meta.required!==undefined&&meta.required!==null&&typeof meta.required!=='boolean')fail('invalid','required must be boolean or null');contract.fields[key]={...contract.fields[key],...meta,description:text(meta.description??contract.fields[key]?.description??'','description')};}}
+    if(data.fields){object(data.fields,'fields');const available=new Set(endpointFields(block).map(f=>f.id));for(const [key,meta]of Object.entries(data.fields)){if(!available.has(key))fail('invalid',`fields has unknown key ${JSON.stringify(key)}; this endpoint has ${available.size?`[${[...available].join(', ')}]`:'no fields yet'} — run document.verify first to generate them`);fields(meta,['description','required']);if(meta.required!==undefined&&meta.required!==null&&typeof meta.required!=='boolean')fail('invalid','required must be boolean or null');contract.fields[key]={...contract.fields[key],...meta,description:text(meta.description??contract.fields[key]?.description??'','description')};}}
     contract.reviewed=false;next.updatedAt=Date.now();next.activeBlockId=block.id;
     // Reuse real execution evidence if the linked request ran through this API/UI.
     const tab=state.tabs.find(t=>t.refId===node.id&&!t.dirty&&t.response&&t.lastRequestSnapshot);
@@ -273,11 +382,85 @@ export async function dispatch(command) {
     const job=jobs.get(id);if(!job)fail('not_found','Job not found in this session');if(action==='job.cancel'&&job.state==='running'){job.cancel?.();job.state='cancelled';job.finishedAt=Date.now();}return jobView(job);
   }
   if(action==='document.export'){
-    const doc=entity('document',id);if(doc.blocks.some(b=>b.running||b.preparing))fail('busy','Wait for validation');const format=command.format||'markdown';if(!['markdown','openapi','html'].includes(format))fail('invalid','Unsupported format');const content=format==='markdown'?deliveryMarkdown(doc):format==='html'?deliveryHtml(doc):JSON.stringify(deliveryOpenApi(doc),null,2);
+    const doc=entity('document',id);if(doc.blocks.some(b=>b.running||b.preparing))fail('busy','Wait for validation');const format=command.format||'markdown';choice(format,['markdown','openapi','html'],'format');const content=format==='markdown'?deliveryMarkdown(doc):format==='html'?deliveryHtml(doc):JSON.stringify(deliveryOpenApi(doc),null,2);
     return {name:doc.name,format,content,review:doc.blocks.filter(b=>b.type==='req').map(b=>({id:b.id,status:endpointStatus(b),issues:reviewIssues(b)})),revision:revision(doc)};
   }
 }
-function listRequests(parent){return (parent.children||[]).flatMap(n=>n.children?listRequests(n):[{id:n.id,name:n.name,protocol:n.protocol||'http',method:n.request?.method,revision:revision(n)}]);}
+function listRequests(parent, budget) {
+  // Bounded on purpose: the caller is usually an LLM whose whole working set is
+  // this response, and a workspace with 300 requests does not fit in one turn.
+  const requests = [];
+  let hidden = 0;
+  const walk = node => {
+    if (node.children) { node.children.forEach(walk); return; }
+    if (!['request', 'ws'].includes(node.kind)) return;
+    if (requests.length >= budget) { hidden += 1; return; }
+    requests.push({ id: node.id, name: node.name, protocol: node.protocol || 'http', method: node.request?.method, revision: revision(node) });
+  };
+  (parent.children || []).forEach(walk);
+  return { requests, hidden };
+}
+function countRequests(parent) {
+  return (parent.children || []).reduce((total, node) => total + (node.children
+    ? countRequests(node)
+    : (['request', 'ws'].includes(node.kind) ? 1 : 0)), 0);
+}
+const INDEX_LIMIT = 80;
+function limitOf(value) {
+  if (value === undefined) return INDEX_LIMIT;
+  if (!Number.isInteger(value) || value < 1 || value > 500) fail('invalid', `limit must be a whole number from 1 to 500, got ${JSON.stringify(value)}`);
+  return value;
+}
+/// One page of the workspace. Without `collectionId` this is a map: every entity
+/// with its size, no request bodies of its own. With `collectionId` it expands that
+/// one collection. An agent can always reach everything by walking collections;
+/// what it must not be able to do is be handed everything at once.
+function workspaceIndex(command) {
+  const limit = limitOf(command.limit);
+  const collections = state.collections.filter(c => c.kind === 'collection');
+  const base = { apiVersion: 3, totalCollections: collections.length, totalRequests: collections.reduce((n, c) => n + countRequests(c), 0) };
+  if (command.collectionId !== undefined) {
+    const collection = entity('collection', command.collectionId);
+    const { requests, hidden } = listRequests(collection, limit);
+    return { ...base, collectionId: collection.id, name: collection.name, revision: revision(collection),
+      requests, hidden, ...(hidden ? { next: `${hidden} more request(s) in this collection; raise limit or use entity.find to narrow` } : {}) };
+  }
+  const shown = collections.slice(0, limit);
+  return {
+    ...base,
+    collections: shown.map(c => ({ id: c.id, name: c.name, revision: revision(c), requests: countRequests(c) })),
+    ...(collections.length > limit ? { hiddenCollections: collections.length - limit } : {}),
+    environments: state.environments.map(e => ({ id: e.id, name: e.name, revision: revision(e) })),
+    documents: state.docs.map(d => ({ id: d.id, name: d.name, revision: revision(d),
+      endpoints: d.blocks.filter(b => b.type === 'req').map(b => ({ id: b.id, sourceId: b.sourceId, status: endpointStatus(b) })) })),
+    runners: state.runners.map(r => ({ id: r.id, name: r.name, revision: revision(r) })),
+    next: 'This is a map, not a dump: pass collectionId to expand one collection, or call entity.find to search by name, method or URL fragment.',
+  };
+}
+/// Substring search over the whole tree. The alternative is an agent reading every
+/// collection to find the one endpoint it was asked about.
+function findRequests(command) {
+  const limit = limitOf(command.limit);
+  const needle = command.query === undefined ? '' : text(command.query, 'query', 500).trim().toLowerCase();
+  const method = command.method === undefined ? '' : text(command.method, 'method', 20).trim().toUpperCase();
+  if (method && !/^[A-Z]{1,20}$/.test(method)) fail('invalid', `method must be an HTTP verb like GET or POST, got ${JSON.stringify(command.method)}`);
+  if (!needle && !method) fail('invalid', 'entity.find needs query, method, or both');
+  const matches = [];
+  let hidden = 0;
+  const walk = (node, collection, path) => {
+    if (node.children) { node.children.forEach(child => walk(child, collection, path.concat(node.name))); return; }
+    if (!['request', 'ws'].includes(node.kind)) return;
+    const url = node.request?.url || '';
+    const haystack = `${node.name} ${url}`.toLowerCase();
+    if ((needle && !haystack.includes(needle)) || (method && (node.request?.method || 'GET').toUpperCase() !== method)) return;
+    if (matches.length >= limit) { hidden += 1; return; }
+    matches.push({ id: node.id, name: node.name, method: node.request?.method || 'GET', url, protocol: node.protocol || 'http',
+      collectionId: collection.id, folder: path.join(' / ') || null, revision: revision(node) });
+  };
+  for (const collection of state.collections) if (collection.kind === 'collection') walk(collection, collection, []);
+  return { query: needle || null, method: method || null, matches, hidden,
+    ...(hidden ? { next: `${hidden} more match(es); raise limit or narrow the query` } : {}) };
+}
 async function replace(domain,existing,next){const list=state[domain],index=existing?list.indexOf(existing):-1;await persist(domain,()=>index<0?list.push(next):list.splice(index,1,next),()=>index<0?list.splice(list.indexOf(next),1):list.splice(index,1,existing));}
 export async function installAutomation() {
   if(connected || !window.__TAURI__?.event?.listen)return;

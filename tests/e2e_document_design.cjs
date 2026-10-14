@@ -38,7 +38,17 @@ function check(name,ok,detail){results.push({name,ok:!!ok,detail});console.log(`
   await page.locator('.delivery-outline-item').nth(1).click();check('目录点击更新当前项',await page.locator('.delivery-outline-item[aria-current=true]').innerText().then(text=>text.includes('创建项目')));
   const second=()=>page.locator('.delivery-endpoint').nth(1);
   await second().getByRole('button',{name:'业务说明',exact:true}).click();
-  check('点击待补充项直接聚焦业务说明',await page.getByLabel('接口业务说明').evaluate(el=>el===document.activeElement));
+  // Focus lands on a later frame than the click when the handler re-renders the card.
+  // Snapshotting `activeElement` on the click's own tick made this fail intermittently
+  // under full-suite load while passing on its own, which is the worst kind of flake.
+  const focused=await page.getByLabel('接口业务说明').evaluate(el=>new Promise(resolve=>{
+    const deadline=Date.now()+1500;
+    const tick=()=>{ if(document.activeElement===el) return resolve(true);
+      if(Date.now()>deadline) return resolve(false);
+      requestAnimationFrame(tick); };
+    tick();
+  })).catch(()=>false);
+  check('点击待补充项直接聚焦业务说明',focused);
   await page.getByLabel('接口业务说明').fill('创建工作区项目。名称在同一工作区内唯一。');
   await second().locator('.delivery-issue').filter({hasText:'必填规则'}).click();
   await page.waitForFunction(()=>document.activeElement?.classList.contains('select')&&document.activeElement.dataset.value==='unknown');

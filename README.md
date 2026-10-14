@@ -8,7 +8,7 @@
 
 **Windows 10 / 11 x64** · **Tauri 2 + Rust** · **MIT**
 
-[下载](#安装) · [快速上手](#快速上手) · [功能](#功能) · [让 AI 编写交付文档](#让-ai-编写交付文档) · [从源码构建](docs/development.md) · [更新记录](docs/releases/v0.1.16.md)
+[下载](#安装) · [快速上手](#快速上手) · [功能](#功能) · [让 AI 编写交付文档](#让-ai-编写交付文档) · [从源码构建](docs/development.md) · [更新记录](docs/releases/v0.1.17.md)
 
 ![Relay 请求与响应](docs/images/request-response.png)
 
@@ -20,7 +20,7 @@ Relay 将接口调试与交付文档放在同一个工作台：**粘贴 cURL →
 
 ## 安装
 
-在本仓库的 Releases 中下载 **`Relay_0.1.16_x64-setup.exe`**（3.3 MB），双击安装。
+在本仓库的 Releases 中下载 **`Relay_0.1.17_x64-setup.exe`**（3.3 MB），双击安装。
 
 | | |
 | --- | --- |
@@ -28,12 +28,12 @@ Relay 将接口调试与交付文档放在同一个工作台：**粘贴 cURL →
 | 运行时 | Microsoft Edge WebView2 Runtime（Win 10/11 通常已内置；缺失时安装器会引导安装） |
 | 默认安装位置 | `%LOCALAPPDATA%\Relay`，可自选 |
 | 数据位置 | 程序旁可写的 `data` 目录；不可写时回退到用户本地应用数据目录 |
-| 安装包 SHA-256 | `283E79F0B6323176165E8384038D204BC38DDC529725F8F5D039BD61AB494D8A`（3,483,725 字节） |
+| 安装包 SHA-256 | `4F86E5C79C52C5B7F582803C9AAA00C45314D27AF9B0A082B11561FEFC801FFF`（3,491,607 字节） |
 
 校验下载文件：
 
 ```powershell
-Get-FileHash -LiteralPath .\Relay_0.1.16_x64-setup.exe -Algorithm SHA256
+Get-FileHash -LiteralPath .\Relay_0.1.17_x64-setup.exe -Algorithm SHA256
 ```
 
 想要免安装版？Release 附件是 NSIS 安装包；不需要安装的话，按[从源码构建](#从源码构建)跑 `.\build.ps1 --portable` 会产出单文件 `dist\Relay.exe`，拷到任意 Windows 10/11 x64 机器即可运行。
@@ -62,7 +62,7 @@ Get-FileHash -LiteralPath .\Relay_0.1.16_x64-setup.exe -Algorithm SHA256
 | **检查与提取** | 状态码、JSON 路径 / 值 / 类型、耗时检查；从 JSON 或响应头提取运行变量，查看每项预期与实际 |
 | **运行计划** | 集合、文件夹或单个请求组成串行步骤；提取 token 后传给后续请求，失败停止、间隔、定时执行，逐条查看请求、响应与检查证据 |
 | **导入导出** | cURL、OpenAPI 3 JSON、HAR 导入；可选请求、改名、排除敏感头和参数；集合 JSON 导出、Markdown 文档导入 |
-| **AI 工作流** | 本地认证 API，自带 **MCP 服务器**（`/mcp`）与通用 skill；三档权限、主机白名单逐跳生效；AI 创建请求、配置检查、真实验证、补写字段说明，用户在应用内审阅并交付 |
+| **AI 工作流** | 本地认证 API，自带 **MCP 服务器**（`/mcp`）与通用 skill；三档权限、主机白名单逐跳生效；有界索引 / 搜索 / 执行前干跑预览 / 批量提交让 AI 一轮就收敛；AI 创建请求、配置检查、真实验证、补写字段说明，用户在应用内审阅并交付 |
 | **外观** | 薄荷、晴空、雾紫、桃杏、奶油、石板六套配色，浅色 / 深色，多档字号与减少动态效果 |
 
 已知边界：定时计划只在应用运行时触发；SSE 与 WebSocket 长连接会在串行计划里跳过；文档的运行验证目前只支持 HTTP。
@@ -101,6 +101,8 @@ Get-FileHash -LiteralPath .\Relay_0.1.16_x64-setup.exe -Algorithm SHA256
 - **三档权限**——只读 / 可编辑 / 可执行，默认不含执行权。越权调用返回 `insufficient_scope` 并说明该申请哪一档；MCP 的 `tools/list` 更是只列出当前权限够得着的工具，只读连接根本看不到「发送请求」这个按钮。
 - **主机白名单**——可执行连接必须点名允许的主机，请求真正发出前校验，**跟随跳转时逐跳重新校验**。白名单里的服务甩一个指向别处的 302，Relay 停在半路并把原因报回来，不会带着同一份凭证继续走。手动发送不受此限制。
 
+读接口按"先给地图、再按需展开"设计，因为外部工具的上下文就是它的预算：`workspace.list` 默认只回每个集合的请求**数量**，`entity.find` 按名称或 URL 片段跨集合搜索，`limit` 一律有界并说明还剩多少。**`request.preview` 在执行之前把变量、鉴权、集合默认头解析成真正要上 wire 的样子回显出来（不发流量），并拿最近一次真实响应逐个校验 checks / extractors 里的 JSON path**——路径写错时会说清在哪一段断的、那一层有哪些键。一次 `{"commands":[...]}` 可提交最多 20 条命令，坏一条不挡其余。
+
 连接步骤、命令行调用和完整边界见 [AI 工作流](docs/ai-workflow.md)。
 
 ## 数据与隐私
@@ -137,7 +139,7 @@ Get-FileHash -LiteralPath .\Relay_0.1.16_x64-setup.exe -Algorithm SHA256
 ```powershell
 cargo install tauri-cli --version "^2" --locked
 
-.\build.ps1              # → dist\Relay_0.1.16_x64-setup.exe（NSIS 安装包）
+.\build.ps1              # → dist\Relay_0.1.17_x64-setup.exe（NSIS 安装包）
 .\build.ps1 --portable   # → dist\Relay.exe（免安装）
 .\build.ps1 --debug      # → dist\Relay.exe（debug）
 ```
@@ -149,16 +151,16 @@ cargo install tauri-cli --version "^2" --locked
 在这个提交上实测通过：
 
 ```powershell
-cargo test --manifest-path src-tauri/Cargo.toml --bin relay   # 56 passed, 0 failed
+cargo test --manifest-path src-tauri/Cargo.toml --bin relay   # 59 passed, 0 failed
 python tests/run_all.py                                       # 306 / 306，11 个套件
 python tests/palette_check.py                                 # 令牌配对，低于 AA：0
 python tests/contrast_audit.py 9223                           # 明暗两主题，低于 AA：无
 ```
 
 回归测试驱动真实 WebView2 窗口，每个套件都用全新进程和干净数据，覆盖请求、文档、运行计划、
-变量链路、导入与六套配色的明暗模式。执行结果、复测记录与边界见[测试记录](docs/testing-v0.1.16.md)。
+变量链路、导入与六套配色的明暗模式。执行结果、复测记录与边界见[测试记录](docs/testing-v0.1.17.md)。
 
-仓库另有 27 个界面与持久化套件（`python tests/run_native.py`，903 / 903）以及检查与导入的单元测试；
+仓库另有 27 个界面与持久化套件（`python tests/run_native.py`，936 / 936）以及检查与导入的单元测试；
 上面的数字不包含它们。Playwright 与 Python 解释器按 `RELAY_PLAYWRIGHT` / `RELAY_PYTHON`
 或标准解析路径取得，见[开发文档](docs/development.md)。
 
