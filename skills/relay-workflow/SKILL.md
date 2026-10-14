@@ -5,7 +5,7 @@ description: Operate the local Relay API workspace to create requests, configure
 
 # Relay workflow
 
-Use Relay's authenticated local API through `scripts/relay_client.py`. Read [references/api.md](references/api.md) for command shapes and field IDs. The user supplies a connection JSON saved from **Relay → AI → 开启 AI 连接 → 保存连接配置**. This credential expires when the connection or application closes. If it is unavailable, prepare the request/document command files independently and ask for its path; do not read private workspace files to obtain credentials.
+Use Relay's authenticated local API through `scripts/relay_client.py`. Read [references/api.md](references/api.md) for command shapes and field IDs. The user supplies a connection JSON saved from **Relay → AI → 开启 AI 连接 → 保存 MCP 配置**. This credential expires when the connection or application closes. If it is unavailable, prepare the request/document command files independently and ask for its path; do not read private workspace files to obtain credentials. A host that only accepts a remote MCP server can point at the same connection's `<baseUrl>/mcp`; same port, same token, same scope, and `tools/list` there only advertises what the connection can actually reach.
 
 ## Work from evidence
 

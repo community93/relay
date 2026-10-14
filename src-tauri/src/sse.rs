@@ -349,7 +349,7 @@ async fn session(
 
     let prepared = {
         let state = app.state::<AppState>();
-        http::prepare(&state, &draft, Some("text/event-stream"))
+        http::prepare(&state, &draft, Some("text/event-stream"), &[])
     };
     let prepared = match prepared {
         Ok(prepared) => prepared,

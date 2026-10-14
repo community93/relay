@@ -36,8 +36,11 @@ export function migrateDataDirectory(path) {
   return invoke('migrate_data_directory', { path });
 }
 
-export function execute(draft, execId) {
-  return invoke('execute', { draft, execId });
+// allowedHosts is empty for a human pressing Send. A non-empty list pins the run:
+// the Rust engine then refuses to follow any redirect hop outside it, so an
+// allowlisted host cannot bounce an AI execution somewhere the user never named.
+export function execute(draft, execId, allowedHosts = []) {
+  return invoke('execute', { draft, execId, allowedHosts });
 }
 
 export function cancel(execId) {

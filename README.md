@@ -8,7 +8,7 @@
 
 **Windows 10 / 11 x64** · **Tauri 2 + Rust** · **MIT**
 
-[下载](#安装) · [快速上手](#快速上手) · [功能](#功能) · [让 AI 编写交付文档](#让-ai-编写交付文档) · [从源码构建](docs/development.md) · [更新记录](docs/releases/v0.1.15.md)
+[下载](#安装) · [快速上手](#快速上手) · [功能](#功能) · [让 AI 编写交付文档](#让-ai-编写交付文档) · [从源码构建](docs/development.md) · [更新记录](docs/releases/v0.1.16.md)
 
 ![Relay 请求与响应](docs/images/request-response.png)
 
@@ -20,7 +20,7 @@ Relay 将接口调试与交付文档放在同一个工作台：**粘贴 cURL →
 
 ## 安装
 
-在本仓库的 Releases 中下载 **`Relay_0.1.15_x64-setup.exe`**（3.3 MB），双击安装。
+在本仓库的 Releases 中下载 **`Relay_0.1.16_x64-setup.exe`**（3.3 MB），双击安装。
 
 | | |
 | --- | --- |
@@ -28,12 +28,12 @@ Relay 将接口调试与交付文档放在同一个工作台：**粘贴 cURL →
 | 运行时 | Microsoft Edge WebView2 Runtime（Win 10/11 通常已内置；缺失时安装器会引导安装） |
 | 默认安装位置 | `%LOCALAPPDATA%\Relay`，可自选 |
 | 数据位置 | 程序旁可写的 `data` 目录；不可写时回退到用户本地应用数据目录 |
-| 安装包 SHA-256 | `C89F9CE99DF52E5305DF2C31990086D2F343FC3F4F95A650479FAAD853657D76`（3,456,490 字节） |
+| 安装包 SHA-256 | `283E79F0B6323176165E8384038D204BC38DDC529725F8F5D039BD61AB494D8A`（3,483,725 字节） |
 
 校验下载文件：
 
 ```powershell
-Get-FileHash -LiteralPath .\Relay_0.1.15_x64-setup.exe -Algorithm SHA256
+Get-FileHash -LiteralPath .\Relay_0.1.16_x64-setup.exe -Algorithm SHA256
 ```
 
 想要免安装版？Release 附件是 NSIS 安装包；不需要安装的话，按[从源码构建](#从源码构建)跑 `.\build.ps1 --portable` 会产出单文件 `dist\Relay.exe`，拷到任意 Windows 10/11 x64 机器即可运行。
@@ -62,7 +62,7 @@ Get-FileHash -LiteralPath .\Relay_0.1.15_x64-setup.exe -Algorithm SHA256
 | **检查与提取** | 状态码、JSON 路径 / 值 / 类型、耗时检查；从 JSON 或响应头提取运行变量，查看每项预期与实际 |
 | **运行计划** | 集合、文件夹或单个请求组成串行步骤；提取 token 后传给后续请求，失败停止、间隔、定时执行，逐条查看请求、响应与检查证据 |
 | **导入导出** | cURL、OpenAPI 3 JSON、HAR 导入；可选请求、改名、排除敏感头和参数；集合 JSON 导出、Markdown 文档导入 |
-| **AI 工作流** | 本地认证 API、通用 skill；AI 创建请求、配置检查、真实验证、补写字段说明，用户在应用内审阅并交付 |
+| **AI 工作流** | 本地认证 API，自带 **MCP 服务器**（`/mcp`）与通用 skill；三档权限、主机白名单逐跳生效；AI 创建请求、配置检查、真实验证、补写字段说明，用户在应用内审阅并交付 |
 | **外观** | 薄荷、晴空、雾紫、桃杏、奶油、石板六套配色，浅色 / 深色，多档字号与减少动态效果 |
 
 已知边界：定时计划只在应用运行时触发；SSE 与 WebSocket 长连接会在串行计划里跳过；文档的运行验证目前只支持 HTTP。
@@ -87,9 +87,21 @@ Get-FileHash -LiteralPath .\Relay_0.1.15_x64-setup.exe -Algorithm SHA256
 
 ## 让 AI 编写交付文档
 
-在右上角 **AI** 开启本地连接并保存配置，让 AI 工具加载项目附带的 `relay-workflow` skill。AI 可创建请求、运行检查、补写字段说明；验证证据来自实际执行，交付状态由用户确认。
+在右上角 **AI** 选择权限并开启本地连接，AI 工具就能操作正在运行的 Relay：创建请求、配置检查、真实验证、补写字段说明。验证证据来自实际执行，交付状态由用户在应用内确认。
 
-支持 skill 的工具可以直接安装 `skills/relay-workflow`。连接步骤、命令行调用和边界见 [AI 工作流](docs/ai-workflow.md)。
+接入方式有两种，共用同一个本机端口、同一份凭证、同一套限制——**装好 Relay 就是一个 MCP 服务器**，不需要额外安装或启动任何服务：
+
+| 方式 | 端点 | 适合 |
+| --- | --- | --- |
+| 通用 skill | `POST /v1/command` | 支持 skill 或命令行的 AI 工具，随仓库提供 `relay-workflow` 与无依赖的 Python 客户端 |
+| MCP | `POST /mcp` | 只认远程 MCP 服务器地址的客户端，直接粘贴连接面板复制的配置 |
+
+边界由应用强制，而不是写在文档里劝 AI 别这么做的：
+
+- **三档权限**——只读 / 可编辑 / 可执行，默认不含执行权。越权调用返回 `insufficient_scope` 并说明该申请哪一档；MCP 的 `tools/list` 更是只列出当前权限够得着的工具，只读连接根本看不到「发送请求」这个按钮。
+- **主机白名单**——可执行连接必须点名允许的主机，请求真正发出前校验，**跟随跳转时逐跳重新校验**。白名单里的服务甩一个指向别处的 302，Relay 停在半路并把原因报回来，不会带着同一份凭证继续走。手动发送不受此限制。
+
+连接步骤、命令行调用和完整边界见 [AI 工作流](docs/ai-workflow.md)。
 
 ## 数据与隐私
 
@@ -125,7 +137,7 @@ Get-FileHash -LiteralPath .\Relay_0.1.15_x64-setup.exe -Algorithm SHA256
 ```powershell
 cargo install tauri-cli --version "^2" --locked
 
-.\build.ps1              # → dist\Relay_0.1.15_x64-setup.exe（NSIS 安装包）
+.\build.ps1              # → dist\Relay_0.1.16_x64-setup.exe（NSIS 安装包）
 .\build.ps1 --portable   # → dist\Relay.exe（免安装）
 .\build.ps1 --debug      # → dist\Relay.exe（debug）
 ```
@@ -137,16 +149,16 @@ cargo install tauri-cli --version "^2" --locked
 在这个提交上实测通过：
 
 ```powershell
-cargo test --manifest-path src-tauri/Cargo.toml --bin relay   # 42 passed, 0 failed
+cargo test --manifest-path src-tauri/Cargo.toml --bin relay   # 56 passed, 0 failed
 python tests/run_all.py                                       # 306 / 306，11 个套件
 python tests/palette_check.py                                 # 令牌配对，低于 AA：0
 python tests/contrast_audit.py 9223                           # 明暗两主题，低于 AA：无
 ```
 
 回归测试驱动真实 WebView2 窗口，每个套件都用全新进程和干净数据，覆盖请求、文档、运行计划、
-变量链路、导入与六套配色的明暗模式。执行结果、复测记录与边界见[测试记录](docs/testing-v0.1.15.md)。
+变量链路、导入与六套配色的明暗模式。执行结果、复测记录与边界见[测试记录](docs/testing-v0.1.16.md)。
 
-仓库另有 27 个界面与持久化套件（`python tests/run_native.py`）以及检查与导入的单元测试；
+仓库另有 27 个界面与持久化套件（`python tests/run_native.py`，903 / 903）以及检查与导入的单元测试；
 上面的数字不包含它们。Playwright 与 Python 解释器按 `RELAY_PLAYWRIGHT` / `RELAY_PYTHON`
 或标准解析路径取得，见[开发文档](docs/development.md)。
 

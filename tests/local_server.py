@@ -43,6 +43,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(payload, ensure_ascii=False).encode())
         elif path == "/redirect":
             self._send(302, b"", extra={"Location": "/hello"})
+        elif path == "/redirect-cross":
+            # Same server, different hostname: 127.0.0.1 -> localhost. Lets a test
+            # prove an allowlist pinned to one covers the other and vice versa.
+            port = self.server.server_address[1]
+            self._send(302, b"", extra={"Location": f"http://localhost:{port}/hello"})
         elif path == "/login":
             self._send(200, b'{"user":"tom"}', extra={"Set-Cookie": "session=abc123; Path=/; HttpOnly"})
         elif path == "/gbk":

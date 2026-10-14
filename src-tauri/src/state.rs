@@ -44,14 +44,24 @@ pub fn settings_of(settings: Option<&Settings>) -> Settings {
     })
 }
 
-pub fn client_for(state: &AppState, s: &Settings) -> Result<reqwest::Client, String> {
+/// `allowed_hosts` is the AI connection's host allowlist; empty means a human
+/// pressed Send and every hop is fair game. When it is set, the redirect policy
+/// re-checks each hop, which means the policy -- and therefore the client -- is
+/// specific to that allowlist and cannot share the cache with unrestricted runs.
+pub fn client_for(
+    state: &AppState,
+    s: &Settings,
+    allowed_hosts: &[String],
+) -> Result<reqwest::Client, String> {
     let proxy = s.proxy.clone().unwrap_or_default().trim().to_string();
+    let pinned = allowed_hosts.join(",");
     let key = format!(
-        "v={}&proxy={}&redirects={}&max={}",
+        "v={}&proxy={}&redirects={}&max={}&hosts={}",
         s.ssl_verify,
         proxy,
         s.follow_redirects,
-        s.max_redirects.unwrap_or(10)
+        s.max_redirects.unwrap_or(10),
+        pinned
     );
     {
         let map = state.clients();
@@ -60,10 +70,12 @@ pub fn client_for(state: &AppState, s: &Settings) -> Result<reqwest::Client, Str
         }
     }
 
-    let redirect_policy = if s.follow_redirects {
+    let redirect_policy = if !s.follow_redirects {
+        reqwest::redirect::Policy::none()
+    } else if allowed_hosts.is_empty() {
         reqwest::redirect::Policy::limited(s.max_redirects.unwrap_or(10))
     } else {
-        reqwest::redirect::Policy::none()
+        crate::http::pinned_policy(s.max_redirects.unwrap_or(10), allowed_hosts)
     };
 
     let mut builder = reqwest::Client::builder()

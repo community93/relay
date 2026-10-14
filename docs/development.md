@@ -27,7 +27,7 @@ cargo install tauri-cli --version "^2" --locked
 
 | 命令 | 产物 |
 | --- | --- |
-| `build.ps1` | `dist/Relay_0.1.15_x64-setup.exe`，版本号来自 Tauri 配置 |
+| `build.ps1` | `dist/Relay_<version>_x64-setup.exe`，版本号来自 `src-tauri/tauri.conf.json` |
 | `build.ps1 --portable` | `dist/Relay.exe`，release 免安装程序 |
 | `build.ps1 --debug` | `dist/Relay.exe`，debug 免安装程序 |
 

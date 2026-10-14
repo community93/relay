@@ -1,6 +1,6 @@
 # Relay API v1
 
-Authenticated native HTTP clients only. Read the saved connection JSON for `baseUrl` and `token`; never expose the token. `GET /v1/health` and `POST /v1/command` require `Authorization: Bearer <token>`. POST requires `Content-Type: application/json`. Browser origins and redirects are rejected. No cloud service, fixed port or credential discovery. The app must remain open with AI connection enabled.
+Authenticated native HTTP clients only. Read the saved connection JSON for `baseUrl` and `token`; never expose the token. `GET /v1/health` and `POST /v1/command` require `Authorization: Bearer <token>`. POST requires `Content-Type: application/json`. Browser origins (an `Origin` or `Sec-Fetch-Site` header) and a mismatched `Host` are rejected, so a web page cannot drive the port. No cloud service, fixed port or credential discovery. The app must remain open with AI connection enabled.
 
 Requests are capped at 2 MiB. Response bodies returned to AI may be bounded; Relay retains engine evidence. Commands return `{ok:true,data:...}` or `{ok:false,error:{code,message}}`. Conflict/busy errors use HTTP409. Unknown IDs use404. Invalid payloads use400. Persistence errors use500. On timeout inspect the entity by stable ID before retrying a write.
 
@@ -18,7 +18,19 @@ The user chooses the tier when opening the connection; the default grants no exe
 
 Calling an action above the granted tier returns HTTP403 with `code:"insufficient_scope"` and a message naming the tier to ask for. Do not retry it in a loop and do not look for a workaround: ask the user to reopen the connection with a wider scope.
 
-`execute` additionally checks the resolved URL against the allowlist immediately before the request leaves Relay, after variable substitution. A blocked host returns `code:"scope"`. `document.verify` and `runner.execute` check **every** endpoint up front and refuse the whole job if any single one is off-list, so a refusal means nothing was sent — fix the allowlist or narrow the document, then retry.
+`execute` additionally checks the resolved URL against the allowlist immediately before the request leaves Relay, after variable substitution. A blocked host returns `code:"scope"`. `document.verify` and `runner.execute` check **every** endpoint up front and refuse the whole job if any single one is off-list, so a refusal means nothing was sent — fix the allowlist or narrow the document, then retry. Redirects are re-checked **hop by hop**: an allowlisted host that answers 302 with an off-list target stops the run and reports `跳转被中止：重定向目标是未授权主机 <host>`. Do not treat a redirect as still-in-bounds just because the URL you sent is in bounds. Manual sends from the Relay window are unrestricted; the allowlist only governs automation.
+
+## MCP endpoint
+
+The same listener also speaks MCP over Streamable HTTP at `POST /mcp`, so a client that supports remote MCP needs no skill, no script and no second process. It is the *same* gate: `initialize`, `tools/list`, `tools/call` and `ping` only, JSON-RPC 2.0, replies as plain JSON. `GET /mcp` returns 405 because Relay never pushes events — poll `job_get` instead. A notification (no `id`) gets an empty 202.
+
+Tool names are the actions with dots replaced by underscores (`request.execute` → `request_execute`), and the arguments are the same envelope body minus `action`. **`tools/list` only advertises tools the current scope can reach** — a `read` connection sees `workspace_list`, `entity_get`, `job_get` and nothing else — so the advertised list is the whole surface. Calling a tool above the granted scope anyway returns a tool result with `isError:true` naming the tier to ask for, not a transport error; surface that to the user instead of retrying.
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"entity_get","arguments":{"type":"request","id":"example-get"}}}
+```
+
+Prefer `/v1/command` when you already have the skill's client; prefer `/mcp` when the host tool only takes a server URL.
 
 ## Discovery and updates
 

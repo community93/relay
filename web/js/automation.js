@@ -11,8 +11,10 @@ import { el, icon, modal, toast, copy, saveAs, segmented } from './ui.js';
 const actions = ['workspace.list','entity.get','collection.upsert','environment.upsert','request.upsert','document.upsert','document.endpoint.upsert','runner.upsert','request.execute','document.verify','runner.execute','job.get','job.cancel','document.export','entity.open'];
 /// Mirrors `action_tier`/`scope_tier` in src-tauri/src/automation.rs. The Rust test
 /// `every_frontend_action_is_graded` fails the build if the two drift apart.
+/// `mcp.tools` is graded too but kept out of `actions`, so it never shows up in the
+/// list an agent is invited to call -- it exists only to answer MCP `tools/list`.
 const ACTION_TIER = {
-  'workspace.list': 0, 'entity.get': 0, 'job.get': 0,
+  'workspace.list': 0, 'entity.get': 0, 'job.get': 0, 'mcp.tools': 0,
   'collection.upsert': 1, 'environment.upsert': 1, 'request.upsert': 1, 'document.upsert': 1,
   'document.endpoint.upsert': 1, 'runner.upsert': 1, 'entity.open': 1, 'document.export': 1,
   'request.execute': 2, 'document.verify': 2, 'runner.execute': 2, 'job.cancel': 2,
@@ -20,6 +22,49 @@ const ACTION_TIER = {
 const SCOPE_TIER = { read: 0, write: 1, execute: 2 };
 const tierOf = scope => SCOPE_TIER[scope] ?? 0;
 const reachableActions = scope => actions.filter(action => ACTION_TIER[action] <= tierOf(scope));
+/// MCP tool descriptors, one per action. These shapes belong here and not in the
+/// transport: they describe the workspace, and `dispatch()` below is the validator
+/// that actually enforces them. The transport only decides which tools a connection
+/// is allowed to see, so a read-only agent is never offered a button it cannot press.
+const ID = { type: 'string', pattern: '^[a-zA-Z0-9_-]{1,80}$' };
+const REVISION = { type: 'string', description: 'expectedRevision from a prior read; Relay refuses the write if the user edited the entity in the meantime' };
+const ROW = { type: 'object', additionalProperties: false, properties: { key: { type: 'string' }, value: { type: 'string' }, enabled: { type: 'boolean' }, description: { type: 'string' } }, required: ['key'] };
+const ENTITY_TYPE = { type: 'string', enum: ['collection', 'request', 'environment', 'document', 'runner'] };
+const DRAFT = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    name: { type: 'string' }, method: { type: 'string', pattern: '^[A-Z]{1,20}$' }, url: { type: 'string' },
+    params: { type: 'array', items: ROW, maxItems: 300 }, headers: { type: 'array', items: ROW, maxItems: 300 },
+    body: { type: 'object', additionalProperties: false, properties: { mode: { type: 'string', enum: ['none', 'raw', 'urlencoded', 'form'] }, raw: { type: 'object', additionalProperties: false, properties: { language: { type: 'string', enum: ['json', 'text', 'xml', 'html', 'javascript'] }, content: { type: 'string' } }, required: ['language', 'content'] }, urlencoded: { type: 'array', items: ROW }, form: { type: 'array', items: ROW } }, required: ['mode'] },
+    checks: { type: 'array', maxItems: 100, items: { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['status', 'time', 'json'] }, operator: { type: 'string' }, path: { type: 'string' }, expected: { type: 'string' }, enabled: { type: 'boolean' } } } },
+    extractors: { type: 'array', maxItems: 100, items: { type: 'object', additionalProperties: false, properties: { name: { type: 'string' }, path: { type: 'string' }, source: { type: 'string', enum: ['json', 'header'] }, header: { type: 'string' }, enabled: { type: 'boolean' } } } },
+    settings: { type: 'object', additionalProperties: false, properties: { timeoutMs: { type: 'number', minimum: 0, maximum: 300000 }, followRedirects: { type: 'boolean' }, sslVerify: { type: 'boolean' }, cookieJar: { type: 'boolean' }, proxy: { type: 'string' }, maxRedirects: { type: 'number' } } },
+    subprotocols: { type: 'array', items: { type: 'string' } },
+  },
+};
+const AUTH = { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['inherit', 'noauth', 'bearer', 'basic', 'apikey'] }, bearer: { type: 'object', additionalProperties: false, properties: { token: { type: 'string' } }, required: ['token'] }, basic: { type: 'object', additionalProperties: false, properties: { username: { type: 'string' }, password: { type: 'string' } } }, apikey: { type: 'object', additionalProperties: false, properties: { key: { type: 'string' }, value: { type: 'string' }, addTo: { type: 'string', enum: ['query', 'header'] } } } }, required: ['kind'] };
+const JOB_ID = { ...ID, description: 'Job id returned by an execute call' };
+const TOOL_SPECS = {
+  'workspace.list': { title: 'Read the workspace', description: 'Every collection with its requests, every environment, document and runner, plus this connection\'s scope and allowed hosts. Call this first; it gives the ids and revisions the writes need.', inputSchema: { type: 'object', additionalProperties: false, properties: {} } },
+  'entity.get': { title: 'Read one entity', description: 'Full saved content of one collection, request, environment, document or runner, with its revision.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID, type: ENTITY_TYPE }, required: ['id', 'type'] } },
+  'entity.open': { title: 'Show an entity to the user', description: 'Opens the entity in Relay\'s window so the person can see what you are working on.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID, type: { ...ENTITY_TYPE, enum: ['request', 'document', 'runner'] } }, required: ['id', 'type'] } },
+  'collection.upsert': { title: 'Create or update a collection', description: 'Omit id to create. Always send expectedRevision when updating.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID, expectedRevision: REVISION, data: { type: 'object', additionalProperties: false, properties: { name: { type: 'string' }, description: { type: 'string' } }, required: ['name'] } }, required: ['data'] } },
+  'environment.upsert': { title: 'Create or update an environment', description: 'Environment variables as {key,value} rows. Values you did not set are left alone only if you read them first; this replaces the variable list.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID, expectedRevision: REVISION, data: { type: 'object', additionalProperties: false, properties: { name: { type: 'string' }, variables: { type: 'array', items: ROW, maxItems: 300 } }, required: ['name'] } }, required: ['data'] } },
+  'request.upsert': { title: 'Create or update a request', description: 'Send the whole draft you want, or paste a cURL as data.curl. collectionId is required when creating. Relay reopens the tab for the user afterwards.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID, collectionId: ID, expectedRevision: REVISION, data: { type: 'object', additionalProperties: false, properties: { name: { type: 'string' }, description: { type: 'string' }, protocol: { type: 'string', enum: ['http', 'sse', 'ws'] }, draft: DRAFT, auth: AUTH, curl: { type: 'string' } } } }, required: ['data'] } },
+  'document.upsert': { title: 'Create or update a delivery document', description: 'The document shell: name, overview text, version. Endpoints are attached with document.endpoint.upsert.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID, expectedRevision: REVISION, data: { type: 'object', additionalProperties: false, properties: { name: { type: 'string' }, overview: { type: 'string' }, version: { type: 'string' } }, required: ['name'] } }, required: ['data'] } },
+  'document.endpoint.upsert': { title: 'Attach a request to a document', description: 'Links a saved request into a delivery document as a verifiable endpoint, with field descriptions and requirements.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID, documentId: ID, requestId: ID, expectedRevision: REVISION, data: { type: 'object', additionalProperties: false, properties: { summary: { type: 'string' }, description: { type: 'string' }, notes: { type: 'string' }, fields: { type: 'object', additionalProperties: { type: 'object', additionalProperties: false, properties: { description: { type: 'string' }, required: { type: ['boolean', 'null'] } } } } } } }, required: ['documentId', 'requestId'] } },
+  'runner.upsert': { title: 'Create or update a run plan', description: 'sources are request ids in the order they should run.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID, expectedRevision: REVISION, data: { type: 'object', additionalProperties: false, properties: { name: { type: 'string' }, sources: { type: 'array', items: ID, maxItems: 300 }, stopOnError: { type: 'boolean' }, delayMs: { type: 'number', minimum: 0, maximum: 60000 } }, required: ['name'] } }, required: ['data'] } },
+  'request.execute': { title: 'Send a request for real', description: 'Runs a saved request through Relay\'s own pipeline, opens the response in the window, and returns the redacted response plus check results. Only hosts on this connection\'s allowlist are reachable, and a redirect that leaves the allowlist stops the run. Returns a job id; poll job.get.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID }, required: ['id'] } },
+  'document.verify': { title: 'Verify a delivery document', description: 'Runs every endpoint of a document and marks each one verified or failed against its declared checks. Refuses up front if any endpoint points outside the allowlist, so no partial run happens. Returns a job id.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID }, required: ['id'] } },
+  'runner.execute': { title: 'Run a run plan', description: 'Executes a runner\'s requests in order, with its stop-on-error and delay settings. Refuses up front if any step points outside the allowlist. Returns a job id.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID }, required: ['id'] } },
+  'job.get': { title: 'Poll a job', description: 'State of an execute job: running, done, failed or cancelled, with the result once finished.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: JOB_ID }, required: ['id'] } },
+  'job.cancel': { title: 'Cancel a job', description: 'Stops a running job mid-flight, the same way the user\'s Stop button does.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: JOB_ID }, required: ['id'] } },
+  'document.export': { title: 'Export a document', description: 'Renders a delivery document as markdown, OpenAPI or HTML for pasting into a hand-off.', inputSchema: { type: 'object', additionalProperties: false, properties: { id: ID, format: { type: 'string', enum: ['markdown', 'openapi', 'html'] } }, required: ['id'] } },
+};
+/// MCP tool names cannot contain dots for some clients, so the public name swaps
+/// them for underscores and only the transport flips it back. Filtering by scope is
+/// the transport's job -- it owns the grant -- so the table is handed over whole.
+const toolName = action => action.replace(/\./g, '_');
 const jobs = new Map();
 let queue = Promise.resolve(), connected = false;
 const fail = (code, message) => { throw Object.assign(Error(message), { code }); };
@@ -83,6 +128,9 @@ async function requireHosts(urls, what) {
     .filter(({ host }) => !host || !allowed.some(pattern => hostMatch(pattern, host)))
     .map(({ raw, host }) => host || raw))];
   if (blocked.length) fail('scope', `${what} targets host(s) outside this connection's allowlist: ${blocked.join(', ')}. Ask the user to add the host under Relay → AI → 允许的主机, then retry.`);
+  // Returned so the engine can keep enforcing it on every redirect hop; checking
+  // only this first URL would let an allowlisted host bounce us anywhere.
+  return allowed;
 }
 function parsedDraft(draft) {
   const out=clone(draft);
@@ -147,9 +195,10 @@ function jobStart(meta, execute, cancel) {
 function jobView(job){const {cancel,...copy}=job;return redacted(copy,job._secrets||[]);}
 export async function dispatch(command) {
   fields(command,['action','id','type','expectedRevision','data','collectionId','documentId','requestId','format']);
-  if(!actions.includes(command.action))fail('invalid','Unknown action');
+  if (ACTION_TIER[command.action] === undefined) fail('invalid', 'Unknown action');
   for(const key of ['id','collectionId','documentId','requestId'])idOf(command[key]);
   const {action,id,data={}}=command;
+  if(action==='mcp.tools'){return {tools:Object.entries(TOOL_SPECS).map(([action,spec])=>({action,name:toolName(action),...spec}))};}
   if(action==='workspace.list'){const c=await api.invoke('automation_status');return {apiVersion:2,scope:c?.scope||'read',allowedHosts:c?.allowedHosts||[],actions:reachableActions(c?.scope||'read'),activeEnvironmentId:state.settings.activeEnvironmentId,collections:state.collections.map(c=>({id:c.id,name:c.name,revision:revision(c),requests:listRequests(c)})),environments:state.environments.map(e=>({id:e.id,name:e.name,revision:revision(e)})),documents:state.docs.map(d=>({id:d.id,name:d.name,revision:revision(d),endpoints:d.blocks.filter(b=>b.type==='req').map(b=>({id:b.id,sourceId:b.sourceId,status:endpointStatus(b)}))})),runners:state.runners.map(r=>({id:r.id,name:r.name,revision:revision(r)}))};}
   if(action==='entity.get'){const value=entity(command.type,id);const result=resultEntity(value);if(command.type==='document')result.endpoints=value.blocks.filter(b=>b.type==='req').map(b=>({id:b.id,fields:redacted(endpointFields(b)),status:endpointStatus(b),issues:reviewIssues(b)}));return result;}
   if(action==='entity.open'){const value=entity(command.type,id);if(command.type==='request'){openRequest(value);state.pane='collections';}else if(command.type==='document'){openDoc(value);state.pane='docs';}else if(command.type==='runner'){openRunner(value);state.pane='runner';}else fail('invalid','Open a request, document or runner');state.overviewPane=false;emit('pane');emit('rerender');return {opened:id};}
@@ -197,10 +246,10 @@ export async function dispatch(command) {
   }
   if(action==='request.execute'){
     fields(data,[]);const node=entity('request',id);busyRequest(node);if(node.protocol!=='http')fail('unsupported','Automatic execution currently supports HTTP; open SSE/WS in Relay');
-    const shell={refId:node.id,draft:clone(node.request),auth:clone(node.auth),protocol:'http'},built=buildSendDraft(shell,{environment:activeEnv()?clone(activeEnv()):null});if(built.missing.length)fail('variables',`Missing variables: ${built.missing.join(', ')}`);await requireHosts([built.draft.url],'This request');const snapshot=requestSnapshot(shell,built),execId=uid('ai');
+    const shell={refId:node.id,draft:clone(node.request),auth:clone(node.auth),protocol:'http'},built=buildSendDraft(shell,{environment:activeEnv()?clone(activeEnv()):null});if(built.missing.length)fail('variables',`Missing variables: ${built.missing.join(', ')}`);const pinned=await requireHosts([built.draft.url],'This request');const snapshot=requestSnapshot(shell,built),execId=uid('ai');
     let cancelled=false;
     return jobStart({action,requestId:id},async()=>{
-      const response=await api.execute(built.draft,execId);response.checkResult=evaluateChecks(built.preparedChecks,response);
+      const response=await api.execute(built.draft,execId,pinned);response.checkResult=evaluateChecks(built.preparedChecks,response);
       if(cancelled)return {ok:false,cancelled:true};
       let tab=state.tabs.find(t=>t.refId===id);if(!tab){tab=openRequest(node);state.pane='collections';state.overviewPane=false;emit('pane');}if(!tab.dirty&&!tab.running){tab.response=response;tab.lastRequestSnapshot=snapshot;touch('tabs');}
       emit('request-completed',{tab:{...shell,id:tab.id},shell:snapshot.template,built:snapshot,response});await flushDomain('docs',{strict:true});emit('rerender');
@@ -212,13 +261,13 @@ export async function dispatch(command) {
     // Refuse the whole document up front. Checking per-endpoint mid-run would send
     // the allowed ones first and stop at the first blocked host, which is a partial
     // verification that still looks like a run happened.
-    await requireHosts(docUrls,'This document');
-    let cancelled=false;return jobStart({action,documentId:id},async()=>{const endpoints=[];for(const block of blocks){if(cancelled)break;await runBlock(doc,block);endpoints.push({id:block.id,status:endpointStatus(block),response:redacted(block.response,block.lastRequestSnapshot?.secrets||[]),issues:reviewIssues(block)});}await flushDomain('docs',{strict:true});return {endpoints,revision:revision(doc),ok:endpoints.length===blocks.length&&endpoints.every(e=>['verified','ready'].includes(e.status.kind))};},()=>{cancelled=true;for(const block of blocks)if(block.running)cancelBlock(doc,block);});
+    const pinned=await requireHosts(docUrls,'This document');
+    let cancelled=false;return jobStart({action,documentId:id},async()=>{const endpoints=[];for(const block of blocks){if(cancelled)break;await runBlock(doc,block,pinned);endpoints.push({id:block.id,status:endpointStatus(block),response:redacted(block.response,block.lastRequestSnapshot?.secrets||[]),issues:reviewIssues(block)});}await flushDomain('docs',{strict:true});return {endpoints,revision:revision(doc),ok:endpoints.length===blocks.length&&endpoints.every(e=>['verified','ready'].includes(e.status.kind))};},()=>{cancelled=true;for(const block of blocks)if(block.running)cancelBlock(doc,block);});
   }
   if(action==='runner.execute'){
     fields(data,[]);const runner=entity('runner',id);if(sessionOf(id))fail('busy','Runner is active');const steps=stepsOf(runner);if(!steps.some(s=>!s.skip))fail('invalid','No executable requests');for(const step of steps)busyRequest(step.node);
-    await requireHosts(steps.filter(step=>!step.skip).map(step=>buildSendDraft({draft:step.node.request,auth:step.node.auth,refId:step.node.id},{environment:activeEnv()?clone(activeEnv()):null}).draft.url),'This runner');
-    return jobStart({action,runnerId:id},async()=>{const run=await runRunner(runner,{trigger:'AI'});await flushDomain('runs',{strict:true});return {run:redacted(run),ok:!!run&&!run.cancelled&&run.totals.failed===0&&run.totals.passed>0};},()=>stopRunner(id));
+    const pinned=await requireHosts(steps.filter(step=>!step.skip).map(step=>buildSendDraft({draft:step.node.request,auth:step.node.auth,refId:step.node.id},{environment:activeEnv()?clone(activeEnv()):null}).draft.url),'This runner');
+    return jobStart({action,runnerId:id},async()=>{const run=await runRunner(runner,{trigger:'AI',allowedHosts:pinned});await flushDomain('runs',{strict:true});return {run:redacted(run),ok:!!run&&!run.cancelled&&run.totals.failed===0&&run.totals.passed>0};},()=>stopRunner(id));
   }
   if(action==='job.get'||action==='job.cancel'){
     const job=jobs.get(id);if(!job)fail('not_found','Job not found in this session');if(action==='job.cancel'&&job.state==='running'){job.cancel?.();job.state='cancelled';job.finishedAt=Date.now();}return jobView(job);
@@ -271,11 +320,12 @@ export async function openAutomationDialog() {
           // The grant is shown where the credential is copied from, so the person
           // handing the file to an AI tool sees what they are handing over.
           el('span', { class: 'ai-connection-scope', text: `权限：${scope}${limit}` }),
+          el('span', { class: 'ai-connection-hint', text: '把它当作 MCP 服务器接进任意 AI 客户端：地址就是上面这个再加 /mcp，鉴权走请求头。下面的按钮给出可直接粘贴的完整配置，含访问凭证，不要贴到公开场合。' }),
         ]),
       ]),
       el('div', { class: 'ai-connection-actions' }, [
-        el('button', { class: 'btn primary', text: '保存连接配置', onclick: () => saveAs({ name: 'relay-connection.json', text: JSON.stringify(connection, null, 2), extensions: ['json'] }) }),
-        el('button', { class: 'btn', text: '复制配置', onclick: () => copy(JSON.stringify(connection, null, 2)) }),
+        el('button', { class: 'btn primary', text: '保存 MCP 配置', onclick: () => saveAs({ name: 'relay-mcp.json', text: JSON.stringify(mcpConfig(connection), null, 2), extensions: ['json'] }) }),
+        el('button', { class: 'btn', text: '复制 MCP 配置', onclick: () => copy(JSON.stringify(mcpConfig(connection), null, 2)) }),
         el('button', { class: 'btn ghost', text: '断开', onclick: async () => { await api.invoke('automation_stop'); await draw(); } }),
       ]),
     ]);

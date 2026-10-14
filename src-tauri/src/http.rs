@@ -79,16 +79,59 @@ fn has_header(draft: &Draft, name: &str) -> bool {
         .any(|h| h.enabled && h.key.eq_ignore_ascii_case(name))
 }
 
+/// True when `host` is covered by one of `patterns`: exact, or `*.apex` matching
+/// the apex and any subdomain. Mirrors `hostMatch()` in web/js/automation.js --
+/// that one guards the URL the caller named, this one guards every hop we then
+/// take, so the two must agree or the allowlist is only as wide as its looser half.
+pub fn host_allowed(patterns: &[String], host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    patterns.iter().any(|pattern| {
+        let pattern = pattern.to_ascii_lowercase();
+        match pattern.strip_prefix("*.") {
+            Some(apex) => host == apex || host.ends_with(&format!(".{apex}")),
+            None => pattern == host,
+        }
+    })
+}
+
+/// A redirect policy that cannot leave `allowed`. Checking only the URL the caller
+/// supplied is not a boundary: any allowlisted host can answer 302 with a target
+/// the user never named, and the engine would walk straight there with the same
+/// credentials. Every hop is re-checked, and the run stops with an error instead.
+pub(crate) fn pinned_policy(max: usize, allowed: &[String]) -> reqwest::redirect::Policy {
+    let allowed = allowed.to_vec();
+    reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= max {
+            return attempt.error("重定向次数过多或循环重定向");
+        }
+        let host = attempt
+            .url()
+            .host_str()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if host_allowed(&allowed, &host) {
+            attempt.follow()
+        } else {
+            attempt.error(format!(
+                "重定向目标是未授权主机 {host}，不在本 AI 连接的允许主机内，已停止跟随"
+            ))
+        }
+    })
+}
+
 /// `accept` is applied only when the request does not set its own Accept header,
 /// which is how SSE streaming gets opted into.
+/// `allowed_hosts` pins the whole client, so a 302 from an allowlisted host cannot
+/// walk the request to a host the user never named.
 pub fn prepare(
     app: &state::AppState,
     draft: &Draft,
     accept: Option<&str>,
+    allowed_hosts: &[String],
 ) -> Result<Prepared, String> {
     let s = state::settings_of(draft.settings.as_ref());
     let url = resolve_url(draft)?;
-    let client = state::client_for(app, &s)?;
+    let client = state::client_for(app, &s, allowed_hosts)?;
 
     let method_name = if draft.method.trim().is_empty() {
         "GET"
@@ -380,6 +423,32 @@ pub async fn read_capped<E: std::fmt::Display>(
     Ok((buf, truncated))
 }
 
+/// reqwest's own `Display` for a redirect failure is the fixed string "error
+/// following redirect"; the reason the policy actually stopped lives further down
+/// the source chain. Surfacing only the outer text would tell a user "redirect
+/// loop" when we deliberately refused to visit a host, which reads like a broken
+/// server. Drop the generic labels and keep the specific cause.
+fn cause_chain(e: &(dyn std::error::Error + 'static)) -> Vec<String> {
+    const GENERIC: [&str; 6] = [
+        "error following redirect",
+        "error sending request",
+        "request or response body error",
+        "error decoding response body",
+        "error upgrading connection",
+        "builder error",
+    ];
+    let mut out = Vec::new();
+    let mut cursor = Some(e);
+    while let Some(current) = cursor {
+        let text = current.to_string();
+        if !text.trim().is_empty() && !GENERIC.contains(&text.as_str()) {
+            out.push(text);
+        }
+        cursor = current.source();
+    }
+    out
+}
+
 pub fn describe_error(e: &reqwest::Error) -> (String, String) {
     let raw = e.to_string();
     let lowered = raw.to_ascii_lowercase();
@@ -390,6 +459,10 @@ pub fn describe_error(e: &reqwest::Error) -> (String, String) {
         );
     }
     if e.is_redirect() {
+        // The last entry is the innermost cause, which is what the policy wrote.
+        if let Some(detail) = cause_chain(e).pop() {
+            return ("redirect".into(), format!("跳转被中止：{detail}"));
+        }
         return ("redirect".into(), format!("重定向次数过多或循环重定向：{raw}"));
     }
     if e.is_connect() {
@@ -442,3 +515,105 @@ pub fn empty_response() -> ExecResponse {
     }
 }
 
+
+#[cfg(test)]
+mod host_guard_tests {
+    use super::{describe_error, host_allowed};
+    use crate::state;
+    fn list(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+    #[test]
+    fn exact_and_wildcard_and_case() {
+        let allowed = list(&["api.test", "*.svc.example.com"]);
+        assert!(host_allowed(&allowed, "api.test"));
+        assert!(host_allowed(&allowed, "API.TEST"));
+        assert!(host_allowed(&allowed, "a.svc.example.com"));
+        // "*.apex" also covers the apex itself, which is what the UI copy promises.
+        assert!(host_allowed(&allowed, "svc.example.com"));
+    }
+    #[test]
+    fn rejects_neighbours_and_suffix_lookalikes() {
+        let allowed = list(&["api.test", "*.svc.example.com"]);
+        assert!(!host_allowed(&allowed, "evil.test"));
+        // The classic bypass: a host that merely ends with the allowed string.
+        assert!(!host_allowed(&allowed, "notapi.test"));
+        assert!(!host_allowed(&allowed, "xsvc.example.com"));
+        assert!(!host_allowed(&allowed, "deep.sub.svc.example.com.evil.io"));
+    }
+    #[test]
+    fn empty_list_allows_nothing() {
+        // The caller passes an empty list only when it means "unrestricted" and
+        // skips the policy entirely; on its own it must never read as "allow all".
+        assert!(!host_allowed(&[], "api.test"));
+    }
+
+    /// A tiny server that answers `/bounce` with a 302 to the *same machine under a
+    /// different hostname*. 127.0.0.1 and localhost are one host to the OS and two
+    /// strings to an allowlist, which makes this the cheapest honest cross-host
+    /// redirect to test against -- no DNS, no internet, no second fixture.
+    async fn bouncing_server() -> (String, u16) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tauri::async_runtime::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut head = [0u8; 2048];
+                let read = socket.read(&mut head).await.unwrap_or(0);
+                let first_line = String::from_utf8_lossy(&head[..read])
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let bounces = first_line.split_whitespace().nth(1) == Some("/bounce");
+                let (status, location) = if bounces {
+                    ("302 Found", format!("Location: http://localhost:{port}/land\r\n"))
+                } else {
+                    ("200 OK", String::new())
+                };
+                let body = "{\"landed\":true}";
+                let _ = socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{location}Connection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
+            }
+        });
+        (format!("127.0.0.1:{port}"), port)
+    }
+
+    #[tokio::test]
+    async fn pinned_client_refuses_a_redirect_that_leaves_the_allowlist() {
+        let app = state::AppState::default();
+        let settings = state::settings_of(None);
+        let (address, _port) = bouncing_server().await;
+        let url = format!("http://{address}/bounce");
+
+        let refused = state::client_for(&app, &settings, &list(&["127.0.0.1"]))
+            .unwrap()
+            .get(&url)
+            .send()
+            .await
+            .unwrap_err();
+        assert!(refused.is_redirect(), "{refused:?}");
+        // The reason has to reach the user, not just "error following redirect".
+        let (kind, message) = describe_error(&refused);
+        assert_eq!(kind, "redirect");
+        assert!(message.contains("localhost"), "{message}");
+        assert!(!message.contains("error following redirect"), "{message}");
+
+        let covered = state::client_for(&app, &settings, &list(&["127.0.0.1", "localhost"]))
+            .unwrap()
+            .get(&url)
+            .send()
+            .await;
+        assert!(covered.is_ok(), "{:?}", covered.err());
+
+        // The human path keeps its own unrestricted client; an allowlist must never
+        // leak into the profile a manual Send uses.
+        let open = state::client_for(&app, &settings, &[])
+            .unwrap()
+            .get(&url)
+            .send()
+            .await;
+        assert!(open.is_ok(), "{:?}", open.err());
+    }
+}

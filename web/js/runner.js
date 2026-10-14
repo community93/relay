@@ -124,7 +124,7 @@ function wait(ms, session) {
   });
 }
 
-export async function runRunner(runner, { trigger = 'manual' } = {}) {
+export async function runRunner(runner, { trigger = 'manual', allowedHosts = [] } = {}) {
   if (sessions.has(runner.id)) {
     toast('这个计划正在运行中', 'err', 2600);
     return null;
@@ -218,7 +218,7 @@ export async function runRunner(runner, { trigger = 'manual' } = {}) {
     repaint();
     const started = Date.now();
     try {
-      const response = await api.execute(built.draft, session.execId);
+      const response = await api.execute(built.draft, session.execId, allowedHosts);
       if (entry.details) captureRunResponse(entry.details, response);
       entry.status = response.status || 0;
       entry.timeMs = response.timeMs || Date.now() - started;

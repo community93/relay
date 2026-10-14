@@ -6,6 +6,10 @@
 //! Relay send authenticated traffic to whatever host a request points at, and
 //! "please don't run the delete endpoint" is not a boundary. So every action is
 //! graded and the connection carries the highest tier the user granted.
+//!
+//! Two dialects share the listener and the gate: `POST /v1/command` speaks Relay's
+//! own envelope, and `POST /mcp` speaks MCP over Streamable HTTP so any MCP client
+//! can attach without a separate bridge process.
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{collections::HashMap, sync::{Arc, Mutex}, time::Duration};
@@ -16,6 +20,10 @@ const BODY_LIMIT: usize = 2 * 1024 * 1024;
 const HEADER_LIMIT: usize = 8192;
 /// read < write < execute. Each tier includes the ones below it.
 const SCOPE_TIERS: [&str; 3] = ["read", "write", "execute"];
+/// Protocol revisions Relay answers. A client asking for something else gets the
+/// newest one we implement, which is what the spec prescribes.
+const MCP_SUPPORTED: [&str; 2] = ["2025-06-18", "2025-03-26"];
+const MCP_LATEST: &str = "2025-06-18";
 #[derive(Default)]
 pub struct Automation { session: Mutex<Option<Session>> }
 struct Session {
@@ -31,7 +39,7 @@ pub struct Connection { enabled: bool, base_url: String, token: String, instance
 /// newly added frontend action cannot become reachable by being forgotten here.
 fn action_tier(action: &str) -> Option<u8> {
     let tier = match action {
-        "workspace.list" | "entity.get" | "job.get" => 0,
+        "workspace.list" | "entity.get" | "job.get" | "mcp.tools" => 0,
         "collection.upsert" | "environment.upsert" | "request.upsert" | "document.upsert"
         | "document.endpoint.upsert" | "runner.upsert" | "entity.open" | "document.export" => 1,
         "request.execute" | "document.verify" | "runner.execute" | "job.cancel" => 2,
@@ -42,6 +50,16 @@ fn action_tier(action: &str) -> Option<u8> {
 /// Unknown or missing scope falls back to the lowest tier, never the highest.
 fn scope_tier(scope: &str) -> u8 {
     SCOPE_TIERS.iter().position(|t| *t == scope).map(|p| p as u8).unwrap_or(0)
+}
+/// MCP tool names -> Relay action name. Underscore is not used in any action, so
+/// flipping it back to a dot is unambiguous and needs no lookup table.
+fn tool_action(name: &str) -> Option<(String, u8)> {
+    let action = name.replace('_', ".");
+    action_tier(&action).map(|needed| (action, needed))
+}
+/// A client asking for a revision we do not implement gets the newest one we do.
+fn negotiate_version(asked: &str) -> &str {
+    if MCP_SUPPORTED.contains(&asked) { asked } else { MCP_LATEST }
 }
 fn normalize_scope(scope: &str) -> Result<String, String> {
     if SCOPE_TIERS.contains(&scope) { Ok(scope.to_string()) }
@@ -124,7 +142,9 @@ async fn read_request(stream: &mut TcpStream) -> Result<Request, (u16, &'static 
     let mut lines = text.split("\r\n");
     let parts: Vec<_> = lines.next().unwrap_or("").split_whitespace().collect();
     if parts.len() != 3 || parts[2] != "HTTP/1.1" { return Err((400, "HTTP/1.1 required")); }
-    let method = parts[0].to_string(); let path = parts[1].to_string();
+    let method = parts[0].to_string();
+    // Route on the path alone: MCP clients append a query string for session ids.
+    let path = parts[1].split('?').next().unwrap_or("").to_string();
     let mut headers = HashMap::new();
     for line in lines.filter(|s| !s.is_empty()) {
         let (key, value) = line.split_once(':').ok_or((400, "Invalid header"))?;
@@ -151,12 +171,7 @@ fn authorize(request: &Request, config: &Connection) -> Result<(), (u16, &'stati
     Ok(())
 }
 async fn response(stream: &mut TcpStream, status: u16, value: Value) {
-    let body = serde_json::to_vec(&value).unwrap_or_default();
-    let header = format!("HTTP/1.1 {status} Result\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n", body.len());
-    let _ = tokio::time::timeout(Duration::from_secs(10), async {
-        stream.write_all(header.as_bytes()).await?;
-        stream.write_all(&body).await
-    }).await;
+    write_raw(stream, status, "application/json; charset=utf-8", &serde_json::to_vec(&value).unwrap_or_default(), &[]).await;
 }
 async fn handle(mut stream: TcpStream, app: tauri::AppHandle, config: Connection) {
     let request = match tokio::time::timeout(Duration::from_secs(10), read_request(&mut stream)).await {
@@ -167,26 +182,33 @@ async fn handle(mut stream: TcpStream, app: tauri::AppHandle, config: Connection
     if request.method == "GET" && request.path == "/v1/health" {
         response(&mut stream, 200, json!({"ok":true,"data":{"product":"Relay","version":env!("CARGO_PKG_VERSION"),"apiVersion":2,"instanceId":config.instance_id,"scope":config.scope,"allowedHosts":config.allowed_hosts}})).await; return;
     }
+    if request.path == "/mcp" { mcp(&app, &config, &request, &mut stream).await; return; }
     if request.method != "POST" || request.path != "/v1/command" { response(&mut stream, 404, json!({"ok":false,"error":{"code":"not_found","message":"Unknown endpoint"}})).await; return; }
     if !request.headers.get("content-type").is_some_and(|s| s.split(';').next().unwrap_or("").trim() == "application/json") { response(&mut stream, 415, json!({"ok":false,"error":{"code":"content_type","message":"application/json required"}})).await; return; }
     let payload: Value = match serde_json::from_slice(&request.body) { Ok(value) => value, Err(_) => { response(&mut stream, 400, json!({"ok":false,"error":{"code":"invalid_json","message":"Invalid JSON"}})).await; return; } };
+    let (status, body) = forward(&app, &config, payload).await;
+    response(&mut stream, status, body).await;
+}
+/// One command round-trip into the window. Both `/v1/command` and the MCP bridge go
+/// through here so there is exactly one capability gate and exactly one reply path.
+async fn forward(app: &tauri::AppHandle, config: &Connection, payload: Value) -> (u16, Value) {
     // Capability check before anything reaches the workspace. The message names the
     // tier to ask for, because an agent that gets a bare 403 just retries.
     let action = payload.get("action").and_then(Value::as_str).unwrap_or("");
     match action_tier(action) {
-        None => { response(&mut stream, 400, json!({"ok":false,"error":{"code":"invalid","message":"Unknown action"}})).await; return; }
+        None => return (400, json!({"ok":false,"error":{"code":"invalid","message":"Unknown action"}})),
         Some(needed) if needed > scope_tier(&config.scope) => {
-            response(&mut stream, 403, json!({"ok":false,"error":{"code":"insufficient_scope","message":format!("{} requires scope \"{}\"; this connection grants \"{}\". Ask the user to reopen the AI connection with a wider scope.",action,SCOPE_TIERS[needed as usize],config.scope)}})).await; return;
+            return (403, json!({"ok":false,"error":{"code":"insufficient_scope","message":format!("{} requires scope \"{}\"; this connection grants \"{}\". Ask the user to reopen the AI connection with a wider scope.",action,SCOPE_TIERS[needed as usize],config.scope)}}));
         }
         Some(_) => {}
-    }
-    let Ok(id) = random_id() else { return };
+    };
+    let Ok(id) = random_id() else { return (500, json!({"ok":false,"error":{"code":"transport","message":"Could not allocate a request id"}})) };
     let (tx, rx) = oneshot::channel();
     let registered = {
         let manager = app.state::<Automation>(); let mut guard = manager.session.lock().unwrap();
         if let Some(session) = guard.as_mut().filter(|s| s.connection.instance_id == config.instance_id) { session.pending.insert(id.clone(), tx); true } else { false }
     };
-    if !registered { response(&mut stream, 503, json!({"ok":false,"error":{"code":"disabled","message":"Connection closed"}})).await; return; }
+    if !registered { return (503, json!({"ok":false,"error":{"code":"disabled","message":"Connection closed"}})); }
     let sent = app.emit_to("main", "relay-automation", json!({"id":id,"instanceId":config.instance_id,"command":payload}));
     let result = if sent.is_ok() { tokio::time::timeout(Duration::from_secs(30), rx).await.ok().and_then(Result::ok) } else { None };
     {
@@ -195,7 +217,114 @@ async fn handle(mut stream: TcpStream, app: tauri::AppHandle, config: Connection
     }
     let result = result.unwrap_or_else(|| json!({"ok":false,"error":{"code":"unavailable","message":"Workspace unavailable; read current state before retrying writes"}}));
     let status = if result["ok"] == true { 200 } else { match result["error"]["code"].as_str() { Some("conflict" | "busy") => 409, Some("not_found") => 404, Some("unavailable") => 503, Some("persistence") => 500, Some("insufficient_scope" | "scope") => 403, _ => 400 } };
-    response(&mut stream, status, result).await;
+    (status, result)
+}
+/// MCP Streamable HTTP: JSON-RPC 2.0 on POST /mcp, answers as plain JSON (the spec
+/// allows that instead of an SSE stream). No separate MCP process and no session
+/// state -- the URL is this same loopback listener, so "download the app" is the
+/// whole installation story.
+async fn mcp(app: &tauri::AppHandle, config: &Connection, request: &Request, stream: &mut TcpStream) {
+    let reject = |code: i64, message: &str| json!({"jsonrpc":"2.0","id":null,"error":{"code":code,"message":message}});
+    if request.method == "GET" {
+        // Server-initiated streaming is optional; without it the spec wants a 405.
+        let body = serde_json::to_vec(&reject(-32600, "Relay does not stream server-initiated MCP messages; POST a request instead")).unwrap_or_default();
+        write_raw(stream, 405, "application/json; charset=utf-8", &body, &[("Allow", "POST, DELETE")]).await;
+        return;
+    }
+    if request.method != "POST" {
+        let body = serde_json::to_vec(&reject(-32600, "Use POST")).unwrap_or_default();
+        write_raw(stream, 405, "application/json; charset=utf-8", &body, &[("Allow", "POST")]).await;
+        return;
+    }
+    if !request.headers.get("content-type").is_some_and(|s| s.split(';').next().unwrap_or("").trim() == "application/json") {
+        let body = serde_json::to_vec(&reject(-32600, "application/json required")).unwrap_or_default();
+        write_raw(stream, 415, "application/json; charset=utf-8", &body, &[]).await;
+        return;
+    }
+    let Ok(envelope) = serde_json::from_slice::<Value>(&request.body) else {
+        let body = serde_json::to_vec(&reject(-32700, "Invalid JSON")).unwrap_or_default();
+        write_raw(stream, 400, "application/json; charset=utf-8", &body, &[]).await;
+        return;
+    };
+    let method = envelope.get("method").and_then(Value::as_str).unwrap_or("");
+    // A notification has no id and must not get a body back.
+    let id = envelope.get("id").filter(|v| !v.is_null()).cloned();
+    let Some(id) = id else {
+        if method.starts_with("notifications/") { write_raw(stream, 202, "application/json", b"", &[]).await; }
+        else { let body = serde_json::to_vec(&reject(-32600, "Missing id")).unwrap_or_default(); write_raw(stream, 400, "application/json; charset=utf-8", &body, &[]).await; }
+        return;
+    };
+    let outcome: Result<Value, (i64, String)> = match method {
+        "initialize" => {
+            let version = negotiate_version(envelope["params"]["protocolVersion"].as_str().unwrap_or(MCP_LATEST));
+            let hosts = if config.allowed_hosts.is_empty() {
+                "no host restriction, because the user drives Relay by hand".to_string()
+            } else {
+                format!("only these hosts: {}", config.allowed_hosts.join(", "))
+            };
+            Ok(json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"Relay","version":env!("CARGO_PKG_VERSION")},
+                "instructions":format!("Relay is a local API workbench. This connection grants scope \"{}\" and tools above that tier are not offered. Executed traffic reaches {}; a redirect that leaves it stops the run. Call workspace.list first to get ids and revisions.",config.scope,hosts)}))
+        }
+        "ping" => Ok(json!({})),
+        "tools/list" => mcp_tool_list(app, config).await.map(|tools| json!({"tools": tools})),
+        "tools/call" => {
+            let name = envelope["params"]["name"].as_str().unwrap_or("");
+            let arguments = envelope["params"]["arguments"].clone();
+            if name.is_empty() { Err((-32602, "params.name is required".into())) }
+            else if !arguments.is_null() && !arguments.is_object() { Err((-32602, "params.arguments must be an object".into())) }
+            else { call_tool(app, config, name, arguments).await }
+        }
+        "" => Err((-32600, "Missing method".into())),
+        other => Err((-32601, format!("Unknown method: {other}"))),
+    };
+    let body = match outcome {
+        Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
+        Err((code, message)) => json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}),
+    };
+    write_raw(stream, 200, "application/json; charset=utf-8", &serde_json::to_vec(&body).unwrap_or_default(), &[]).await;
+}
+/// The tool table comes from the frontend, which is where the workspace shapes are
+/// actually validated; this filters it so an over-privileged tool is never even
+/// advertised. `tools/call` checks the tier again rather than trusting the list.
+async fn mcp_tool_list(app: &tauri::AppHandle, config: &Connection) -> Result<Vec<Value>, (i64, String)> {
+    let (status, body) = forward(app, config, json!({"action":"mcp.tools"})).await;
+    if status != 200 { return Err((-32603, body["error"]["message"].as_str().unwrap_or("Workspace unavailable").to_string())); }
+    let granted = scope_tier(&config.scope);
+    // `forward` hands back the whole {ok,data} envelope, so the table is one level in.
+    Ok(body["data"]["tools"].as_array().map(|rows| rows.iter()
+        .filter(|row| row["action"].as_str().and_then(action_tier).is_some_and(|needed| needed <= granted))
+        .map(|row| json!({"name":row["name"],"title":row["title"],"description":row["description"],"inputSchema":row["inputSchema"]}))
+        .collect()).unwrap_or_default())
+}
+async fn call_tool(app: &tauri::AppHandle, config: &Connection, name: &str, arguments: Value) -> Result<Value, (i64, String)> {
+    // A client that skipped tools/list still cannot reach a tool the scope excludes.
+    let (action, needed) = tool_action(name).ok_or_else(|| (-32602, format!("Unknown tool: {name}")))?;
+    if needed > scope_tier(&config.scope) {
+        return Ok(tool_text(format!("Tool \"{name}\" needs scope \"{}\"; this connection grants \"{}\". Ask the user to reopen the AI connection with a wider scope.", SCOPE_TIERS[needed as usize], config.scope), true));
+    }
+    let mut payload = if arguments.is_null() { json!({}) } else { arguments };
+    payload["action"] = json!(action);
+    let (status, body) = forward(app, config, payload).await;
+    let text = if status == 200 {
+        serde_json::to_string_pretty(&body["data"]).unwrap_or_else(|_| "null".into())
+    } else {
+        // Relay's error messages already name the field and the fix, so the agent can
+        // correct itself; isError keeps the JSON-RPC call itself successful.
+        format!("{} (code: {})", body["error"]["message"].as_str().unwrap_or("Rejected"), body["error"]["code"].as_str().unwrap_or("invalid"))
+    };
+    Ok(tool_text(text, status != 200))
+}
+fn tool_text(text: String, is_error: bool) -> Value {
+    json!({"content":[{"type":"text","text":text}],"isError":is_error})
+}
+async fn write_raw(stream: &mut TcpStream, status: u16, ctype: &str, body: &[u8], extra: &[(&str, &str)]) {
+    let mut header = format!("HTTP/1.1 {status} Result\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n", body.len());
+    for (key, value) in extra { header.push_str(&format!("{key}: {value}\r\n")); }
+    header.push_str("\r\n");
+    let _ = tokio::time::timeout(Duration::from_secs(10), async {
+        stream.write_all(header.as_bytes()).await?;
+        stream.write_all(body).await
+    }).await;
 }
 #[cfg(test)]
 mod tests {
@@ -215,7 +344,7 @@ mod tests {
         // A new action that is not in the table would be refused, which is the safe
         // direction, but it would also silently break for real users. Keep the
         // transport's table and the frontend's list in step.
-        for action in ["workspace.list","entity.get","job.get","collection.upsert","environment.upsert",
+        for action in ["workspace.list","entity.get","job.get","mcp.tools","collection.upsert","environment.upsert",
                        "request.upsert","document.upsert","document.endpoint.upsert","runner.upsert",
                        "entity.open","document.export","request.execute","document.verify",
                        "runner.execute","job.cancel"] {
@@ -223,6 +352,35 @@ mod tests {
         }
     }
     #[test] fn unknown_action_is_refused() { assert_eq!(action_tier("request.delete_all"), None); }
+    #[test] fn tool_names_round_trip_to_actions() {
+        // Every graded action must survive the underscore flip that MCP tool names
+        // need, or a client would faithfully call a tool that resolves to nothing.
+        for action in ["workspace.list","entity.get","job.get","mcp.tools","collection.upsert","environment.upsert",
+                       "request.upsert","document.upsert","document.endpoint.upsert","runner.upsert",
+                       "entity.open","document.export","request.execute","document.verify",
+                       "runner.execute","job.cancel"] {
+            let name = action.replace('.', "_");
+            assert_eq!(tool_action(&name).map(|(_, tier)| tier), action_tier(action), "{name}");
+            assert!(!action.contains('_'), "{action} would be ambiguous as a tool name");
+        }
+        assert!(tool_action("collection_delete_everything").is_none());
+    }
+    #[test] fn tool_calls_respect_the_granted_scope() {
+        // Mirrors call_tool's gate: a client that never called tools/list still cannot
+        // reach a tool above the scope, and an unknown name is a hard error.
+        let granted = scope_tier("read");
+        assert!(tool_action("entity_get").is_some_and(|(_, needed)| needed <= granted));
+        assert!(tool_action("request_upsert").is_some_and(|(_, needed)| needed > granted));
+        assert!(tool_action("request_execute").is_some_and(|(_, needed)| needed > granted));
+        assert_eq!(tool_action("mcp_tools").map(|(_, needed)| needed), Some(0));
+    }
+    #[test] fn protocol_negotiation_falls_back_to_what_we_implement() {
+        assert_eq!(negotiate_version("2025-03-26"), "2025-03-26");
+        assert_eq!(negotiate_version("2025-06-18"), "2025-06-18");
+        // A newer or garbage revision gets our latest, never an echo of the ask.
+        assert_eq!(negotiate_version("2099-01-01"), MCP_LATEST);
+        assert_eq!(negotiate_version(""), MCP_LATEST);
+    }
     #[test] fn tiers_are_ordered_read_write_execute() {
         assert_eq!(action_tier("entity.get"), Some(0));
         assert_eq!(action_tier("request.upsert"), Some(1));

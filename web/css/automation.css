@@ -1,12 +1,15 @@
-.ai-connection-card { display:flex; align-items:center; gap:16px; padding:22px; border:1px solid var(--line); border-radius:var(--r-lg); background:var(--bg-inset); margin-bottom:18px }
+.ai-connection-card { display:flex; align-items:center; gap:16px; padding:22px; border:1px solid var(--line); border-radius:var(--r-lg); background:var(--bg-inset) }
 .ai-connection-symbol { display:grid; place-items:center; flex:0 0 46px; height:46px; border-radius:12px; color:var(--accent); background:var(--accent-soft) }
 .ai-connection-symbol svg { width:24px; height:24px }
-.ai-connection-card>div { display:flex; min-width:0; flex-direction:column; gap:9px }
+.ai-connection-card>div { display:flex; min-width:0; flex-direction:column; gap:var(--s-2) }
 .ai-connection-state { font-weight:600; color:var(--text-dim) }
 .ai-connection-state.connected { color:var(--accent) }
 .ai-connection-address { font-size:12px; color:var(--text-dim); overflow-wrap:anywhere }
-.ai-connection-actions { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px }
+.ai-connection-actions { display:flex; flex-wrap:wrap; gap:8px }
 /* The grant is stated in the same card as the address and the copy button, so it
    is read at the moment the credential is handed over rather than after. */
 .ai-connection-scope { font-size:var(--t-cap); color:var(--text-faint); overflow-wrap:anywhere }
 .ai-connection-hosts.muted { opacity:.5 }
+/* The MCP hand-off note sits under the credential, so it reads as guidance rather
+   than another value to copy. */
+.ai-connection-hint { font-size:var(--t-cap); line-height:1.5; color:var(--text-faint); overflow-wrap:anywhere }

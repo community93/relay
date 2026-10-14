@@ -128,7 +128,7 @@ function buildShell() {
         el('div', { class: 'navigation-footer' }, [
           el('span', { class: 'navigation-footer-mark', html: BRAND_SVG, 'aria-hidden': 'true' }),
           el('span', { class: 'navigation-footer-name', text: 'Relay' }),
-          el('span', { class: 'navigation-footer-version', text: 'v0.1.15' }),
+          el('span', { class: 'navigation-footer-version', text: 'v0.1.16' }),
         ]),
       ]),
       el('div', { class: 'col-resizer', id: 'col-resizer', title: '拖动调整侧栏宽度，双击复位' }),

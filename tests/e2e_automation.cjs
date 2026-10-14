@@ -1,5 +1,6 @@
 const {chromium}=require('./playwright.cjs');
 const fs=require('node:fs'),path=require('node:path'),net=require('node:net'),{execFile}=require('node:child_process');
+const APP_VERSION=JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json','utf8')).version,SHOTS='reports/automation-'+APP_VERSION;
 const results=[];const check=(name,ok,detail)=>{results.push({name,ok:!!ok});console.log(`${ok?'PASS':'FAIL'} ${name}${ok?'':' '+JSON.stringify(detail)}`);};
 (async()=>{
  const browser=await chromium.connectOverCDP(process.env.RELAY_CDP_URL),page=browser.contexts()[0].pages()[0],errors=[];
@@ -14,7 +15,7 @@ const results=[];const check=(name,ok,detail)=>{results.push({name,ok:!!ok});con
   await page.locator('.ai-connection-hosts input').fill('127.0.0.1');
   await page.getByRole('button',{name:'开启 AI 连接',exact:true}).click();await page.waitForSelector('.ai-connection-state.connected');
   config=await page.evaluate(()=>window.__TAURI__.core.invoke('automation_status'));
-  fs.mkdirSync('reports/automation-0.1.15',{recursive:true});await page.waitForTimeout(300);await page.screenshot({path:'reports/automation-0.1.15/connection-light.png'});
+  fs.mkdirSync(SHOTS,{recursive:true});await page.waitForTimeout(300);await page.screenshot({path:`${SHOTS}/connection-light.png`});
   check('连接面板不暴露token且地址完整',!(await page.locator('.modal').innerText()).includes(config.token)&&(await page.locator('.ai-connection-address').innerText())===config.baseUrl);
   await page.keyboard.press('Escape');await page.waitForTimeout(150);
   const headers={Authorization:'Bearer '+config.token,'Content-Type':'application/json'};
@@ -53,10 +54,58 @@ const results=[];const check=(name,ok,detail)=>{results.push({name,ok:!!ok});con
   // Refusing before a job exists is the point: a blocked execution that still left a
   // job record would look to the user like an attempt had been made.
   check('被拦下的请求没有留下任务记录',blocked.error.jobId===undefined&&blocked.status===403,blocked);
+  /* ---- MCP over the same listener, and the per-hop host pin ----
+     Two different clients speak to this port: a hand-written skill posts Relay's own
+     envelope, an MCP client posts JSON-RPC. Both must land on the same gate, so the
+     scope checks above are repeated through /mcp rather than assumed. */
+  async function rpc(method,params,extra={},id='rpc-1'){const r=await fetch(config.baseUrl+'/mcp',{method:'POST',headers:{...headers,...extra},body:JSON.stringify({jsonrpc:'2.0',id,method,params})});return {status:r.status,text:await r.text()};}
+  async function call2(method,params,extra={}){const r=await rpc(method,params,extra);let body;try{body=JSON.parse(r.text);}catch{body=null;}return {status:r.status,body,data:body?.result,error:body?.error};}
+  const init=await call2('initialize',{protocolVersion:'2025-03-26',capabilities:{},clientInfo:{name:'e2e',version:'1'}});
+  check('MCP initialize 报协议版本与权限',init.status===200&&init.data?.protocolVersion==='2025-03-26'&&init.data?.serverInfo?.name==='Relay'&&/scope "execute"/.test(init.data?.instructions||''),init);
+  check('MCP 不认识的协议版本回落到最新实现',(await call2('initialize',{protocolVersion:'2099-01-01',capabilities:{},clientInfo:{name:'e2e',version:'1'}})).data?.protocolVersion==='2025-06-18');
+  const listedTools=(await call2('tools/list',{})).data?.tools||[];
+  check('可执行连接下 MCP 工具表完整且名字不含点',listedTools.length===15&&listedTools.every(t=>/^[a-z0-9_]+$/.test(t.name)&&t.inputSchema&&t.description),listedTools.map(t=>t.name));
+  check('MCP 工具表不暴露内部动作',!listedTools.some(t=>t.name==='mcp_tools'),listedTools.map(t=>t.name));
+  const ping=await call2('ping',{});check('MCP ping 可用',ping.status===200&&ping.body?.result!==undefined,ping);
+  // A notification carries no id, so the answer must be an empty 202. Replying with a
+  // body makes strict clients treat the connection as broken.
+  const CRLF = String.fromCharCode(13, 10);
+  const notifyBody = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  const notedRaw = await new Promise((resolve, reject) => { const u = new URL(config.baseUrl), socket = net.connect(Number(u.port), '127.0.0.1', () => socket.write(['POST /mcp HTTP/1.1', `Host: ${u.host}`, `Authorization: Bearer ${config.token}`, 'Content-Type: application/json', `Content-Length: ${notifyBody.length}`, '', notifyBody].join(CRLF))); let raw = ''; socket.on('data', c => raw += c); socket.on('end', () => { const i = raw.indexOf(CRLF + CRLF); resolve({ head: raw.slice(0, i), body: raw.slice(i + 4) }); }); socket.on('error', reject); });
+  check('MCP 通知返回202且没有响应体',/^HTTP\/1\.1 202/.test(notedRaw.head)&&notedRaw.body==='',notedRaw);
+  check('MCP 未知方法返回JSON-RPC错误',(await call2('resources/list',{})).error?.code===-32601);
+  check('MCP 未鉴权返回401',(await rpc('tools/list',{},{Authorization:''})).status===401);
+  await reopen('read',[]);
+  const readOnly=(await call2('tools/list',{})).data?.tools||[];
+  check('只读连接的MCP只给读工具',readOnly.length===3&&readOnly.map(t=>t.name).sort().join()==='entity_get,job_get,workspace_list',readOnly.map(t=>t.name));
+  const crossed=await call2('tools/call',{name:'request_execute',arguments:{id:aRequestId}});
+  // The refusal must come back as a tool result the model can read, not a transport
+  // error it will retry or a hard JSON-RPC failure it will swallow.
+  check('越过MCP工具表直接调用高权限工具被拒',crossed.data?.isError===true&&/scope "execute"/.test(crossed.data?.content?.[0]?.text||''),crossed);
+  check('只读连接下MCP读取可用',(await call2('tools/call',{name:'workspace_list',arguments:{}})).data?.isError===false);
+  await reopen('execute',['127.0.0.1']);
+  const viaMcp=await call2('tools/call',{name:'request_execute',arguments:{id:'ai-offlist'}});
+  check('MCP路径同样受主机白名单约束',viaMcp.data?.isError===true&&/off-list\.test/.test(viaMcp.data?.content?.[0]?.text||''),viaMcp);
+  const badTool=await call2('tools/call',{name:'collection_delete_everything',arguments:{}});
+  check('MCP未知工具返回-32602',badTool.error?.code===-32602,badTool);
+  // 127.0.0.1 and localhost are different strings but the same machine, which makes
+  // them a cheap cross-host redirect. The allowlist has to cover the hop, not just
+  // the URL the agent typed -- otherwise any allowlisted host can bounce traffic
+  // somewhere the user never named while carrying the same credentials.
+  await call({action:'request.upsert',id:'ai-pin',collectionId:listed.collections[0].id,data:{name:'跳转出白名单',draft:{method:'GET',url:'http://127.0.0.1:8899/redirect-cross'}}});
+  const bounced=await wait((await call({action:'request.execute',id:'ai-pin'})).jobId);
+  check('跟随跳转离开白名单时中止并把原因报出来',bounced.state==='completed'&&bounced.result?.ok===false&&/未授权主机 localhost/.test(bounced.result?.response?.error||'')&&bounced.result?.response?.errorKind==='redirect',bounced);
+  await reopen('execute',['127.0.0.1','localhost']);
+  const followed=await wait((await call({action:'request.execute',id:'ai-pin'})).jobId);
+  check('白名单覆盖跳转目标后正常跟随',followed.state==='completed'&&followed.result?.response?.status===200&&/localhost:8899\/hello$/.test(followed.result?.response?.finalUrl||''),followed);
+  // A human pressing Send passes an empty allowlist, which must stay unrestricted.
+  const byHand=await page.evaluate(async()=>{const s=await import('./js/state.js'),api=await import('./js/api.js');
+    return await api.execute(s.findNode('ai-pin').node.request,'hand-pin',[]).catch(e=>({error:String(e)}));});
+  check('手动发送不受跳转白名单限制',byHand.status===200&&/localhost:8899\/hello$/.test(byHand.finalUrl||''),byHand);
   await call({action:'request.upsert',id:'ai-offlist',collectionId:listed.collections[0].id,expectedRevision:offList.revision,data:{draft:{method:'GET',url:'http://127.0.0.1:19110/health'}}});
   check('错误token返回401',(await raw({action:'workspace.list'},{Authorization:'Bearer wrong'})).status===401);
   check('浏览器Origin请求返回403',(await raw({action:'workspace.list'},{Origin:'https://example.invalid'})).status===403);
-  const health=await (await fetch(config.baseUrl+'/v1/health',{headers})).json();check('真实服务返回版本和实例ID',health.ok&&health.data.version==='0.1.15'&&health.data.instanceId===config.instanceId);
+  const health=await (await fetch(config.baseUrl+'/v1/health',{headers})).json();check('真实服务返回版本和实例ID',health.ok&&health.data.version===APP_VERSION&&health.data.instanceId===config.instanceId);
   check('未知命令和字段被拒绝',(await raw({action:'delete.everything'})).status===400&&(await raw({action:'workspace.list',unexpected:true})).status===400);
   const oversize=await new Promise((resolve,reject)=>{const u=new URL(config.baseUrl),socket=net.connect(Number(u.port),'127.0.0.1',()=>socket.write(`POST /v1/command HTTP/1.1\r\nHost: ${u.host}\r\nContent-Length: 2097153\r\n\r\n`));let response='';socket.on('data',chunk=>response+=chunk);socket.on('end',()=>resolve(response));socket.on('error',reject);});
   check('大于2MiB请求在读取Body前拒绝',oversize.startsWith('HTTP/1.1 413'));
@@ -98,7 +147,7 @@ const results=[];const check=(name,ok,detail)=>{results.push({name,ok:!!ok});con
   check('API拒绝伪造验证和已确认状态',(await raw({action:'document.endpoint.upsert',id:endpoint.id,documentId:'ai-delivery',requestId:'ai-project',expectedRevision:link.revision,data:{reviewed:true,verified:{at:1}}})).status===400);
   await call({action:'entity.open',type:'document',id:'ai-delivery'});await page.waitForSelector('.delivery-endpoint');
   check('应用中直接查看AI文档',await page.locator('.delivery-endpoint-title').inputValue()==='查询项目列表');
-  await page.locator('.delivery-tabs').getByRole('button',{name:'字段说明',exact:true}).click();await page.screenshot({path:'reports/automation-0.1.15/document-light.png'});
+  await page.locator('.delivery-tabs').getByRole('button',{name:'字段说明',exact:true}).click();await page.screenshot({path:`${SHOTS}/document-light.png`});
   const draftExport=await call({action:'document.export',id:'ai-delivery',format:'markdown'});
   check('导出保留未确认交付状态',draftExport.review[0].status.kind==='verified');
   await page.locator('.delivery-endpoint-foot').getByRole('button',{name:'确认交付',exact:true}).click();
@@ -130,7 +179,7 @@ const results=[];const check=(name,ok,detail)=>{results.push({name,ok:!!ok});con
   const runClient=(args,input)=>new Promise(resolve=>{const process=execFile(py,[script,'--config',connectionPath,...args],{encoding:'utf8'},(error,stdout,stderr)=>resolve({status:error?error.code:0,stdout,stderr}));if(input!==undefined)process.stdin.end(input);});
   const list=await runClient(['list']);
   check('可移植客户端真实读取工作区',list.status===0&&JSON.parse(list.stdout).documents.some(d=>d.id==='ai-delivery'),list.stderr);
-  const output=path.resolve('reports/automation-0.1.15/ai-delivery.html');if(fs.existsSync(output))fs.unlinkSync(output);
+  const output=path.resolve(`${SHOTS}/ai-delivery.html`);if(fs.existsSync(output))fs.unlinkSync(output);
   const exported=await runClient(['export','--id','ai-delivery','--format','html','--output',output]);
   check('skill客户端真实导出HTML',exported.status===0&&fs.readFileSync(output,'utf8').includes('查询项目列表'),exported.stderr);
   const current=await call({action:'entity.get',type:'request',id:'ai-project'});
@@ -141,12 +190,12 @@ const results=[];const check=(name,ok,detail)=>{results.push({name,ok:!!ok});con
   check('skill等待真实执行且业务失败返回非零',business.status===2&&JSON.parse(business.stdout).result.ok===false,business.stderr);
   const failedDoc=await call({action:'entity.get',type:'document',id:'ai-delivery'});check('验证失败保留上次样例且取消交付状态',failedDoc.entity.blocks[0].verified.at===beforeFailed&&failedDoc.endpoints[0].status.kind==='failed'&&!failedDoc.entity.blocks[0].contract.reviewed);
   const duplicate=await runClient(['export','--id','ai-delivery','--format','html','--output',output]);check('客户端避免意外覆盖文件',duplicate.status!==0);
-  await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.getByRole('button',{name:'AI 连接',exact:true}).click();await page.waitForSelector('.ai-connection-state.connected');await page.waitForTimeout(300);await page.screenshot({path:'reports/automation-0.1.15/connection-dark.png'});
+  await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.getByRole('button',{name:'AI 连接',exact:true}).click();await page.waitForSelector('.ai-connection-state.connected');await page.waitForTimeout(300);await page.screenshot({path:`${SHOTS}/connection-dark.png`});
   await page.getByRole('button',{name:'断开',exact:true}).click();check('断开后旧端口不可访问',await fetch(config.baseUrl+'/v1/health',{headers}).then(()=>false).catch(()=>true));
   await page.getByRole('button',{name:'开启 AI 连接',exact:true}).click();const next=await page.evaluate(()=>window.__TAURI__.core.invoke('automation_status'));check('重启连接轮换token和实例',next.token!==config.token&&next.instanceId!==config.instanceId);
   const old=await fetch(next.baseUrl+'/v1/health',{headers}).then(r=>r.status);check('旧token无法访问新连接',old===401);
   await page.getByRole('button',{name:'断开',exact:true}).click();await page.keyboard.press('Escape');
   check('无未捕获前端异常',errors.length===0,errors);
  }catch(error){check('automation scenario',false,error.stack);}finally{if(fs.existsSync(connectionPath))fs.unlinkSync(connectionPath);await browser.close();}
- console.log(`${results.filter(r=>r.ok).length}/${results.length} passed`);fs.writeFileSync('reports/automation-0.1.15/results.json',JSON.stringify(results,null,2));process.exitCode=results.some(r=>!r.ok)?1:0;
+ console.log(`${results.filter(r=>r.ok).length}/${results.length} passed`);fs.writeFileSync(`${SHOTS}/results.json`,JSON.stringify(results,null,2));process.exitCode=results.some(r=>!r.ok)?1:0;
 })();

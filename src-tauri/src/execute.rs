@@ -31,9 +31,11 @@ pub async fn execute(
     app: AppHandle,
     draft: Draft,
     exec_id: String,
+    allowed_hosts: Option<Vec<String>>,
 ) -> Result<ExecResponse, String> {
     let worker_app = app.clone();
-    let task = tokio::spawn(async move { run(worker_app, draft).await });
+    let pinned = allowed_hosts.unwrap_or_default();
+    let task = tokio::spawn(async move { run(worker_app, draft, pinned).await });
     register(&app, &exec_id, task.abort_handle());
 
     let joined = task.await;
@@ -71,11 +73,11 @@ pub fn cancel(app: AppHandle, exec_id: String) -> Result<(), String> {
     }
 }
 
-async fn run(app: AppHandle, draft: Draft) -> Result<ExecResponse, String> {
+async fn run(app: AppHandle, draft: Draft, allowed_hosts: Vec<String>) -> Result<ExecResponse, String> {
     let mut res = http::empty_response();
     let prepared = {
         let state = app.state::<AppState>();
-        http::prepare(&state, &draft, None)
+        http::prepare(&state, &draft, None, &allowed_hosts)
     }?;
     res.final_url = prepared.url.clone();
 

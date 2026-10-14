@@ -895,7 +895,7 @@ function responsePanel(block) {
 
 /* ---------- running ---------- */
 
-export async function runBlock(doc, block) {
+export async function runBlock(doc, block, allowedHosts = []) {
   if (block.running) return cancelBlock(doc, block);
   if(block.preparing)return;
   block.preparing=true;
@@ -919,7 +919,7 @@ export async function runBlock(doc, block) {
   block.lastRequestSnapshot=requestSnapshot(shell,built);
   repaint();
   try {
-    const response = await api.execute(draft, execId);
+    const response = await api.execute(draft, execId, allowedHosts);
     if(block.execId!==execId)return;
     response.checkResult=evaluateChecks(rules,response);
     captureVerification(block,shell,built,response);

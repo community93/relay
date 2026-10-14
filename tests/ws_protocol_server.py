@@ -51,9 +51,39 @@ async def handler(socket):
         task.cancel()
 
 
+def ensure_cert(root):
+    """Mint the localhost cert the wss fixture needs.
+
+    `create_ws_cert.ps1` uses `ExportCertificatePem` / `ExportPkcs8PrivateKeyPem`,
+    which are .NET 5+ APIs — so it needs PowerShell 7 and fails on a box that only
+    has Windows PowerShell 5.1. openssl does the same job and is far more common,
+    so the fixture works wherever Python does.
+    """
+    target = root / '.design-qa' / 'ws-certificate'
+    cert, key = target / 'cert.pem', target / 'key.pem'
+    if cert.exists() and key.exists():
+        probe = subprocess.run(['openssl', 'x509', '-checkend', '3600', '-noout', '-in', str(cert)],
+                               capture_output=True)
+        if probe.returncode == 0:
+            return
+    target.mkdir(parents=True, exist_ok=True)
+    for command in (
+        ['pwsh', '-NoProfile', '-File', str(root / 'tests/create_ws_cert.ps1')],
+        ['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
+         '-keyout', str(key), '-out', str(cert), '-subj', '/CN=localhost',
+         '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1'],
+    ):
+        try:
+            if subprocess.run(command, check=True, capture_output=True).returncode == 0:
+                return
+        except (OSError, subprocess.CalledProcessError):
+            continue
+    raise RuntimeError('Neither pwsh nor openssl can mint the fixture certificate')
+
+
 async def main():
     root=Path(__file__).resolve().parent.parent
-    subprocess.run(['pwsh','-NoProfile','-File',str(root/'tests/create_ws_cert.ps1')],check=True,capture_output=True)
+    ensure_cert(root)
     tls=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     tls.load_cert_chain(root/'.design-qa/ws-certificate/cert.pem',root/'.design-qa/ws-certificate/key.pem')
     async with serve(handler, '127.0.0.1', 19001, process_request=handshake,
