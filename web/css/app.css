@@ -3207,6 +3207,34 @@ pre.code {
   padding: 0 6px;
 }
 
+/* data file (CSV loop) — preview is a sheet-card table, header row inset */
+.data-preview {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--sheet-card);
+}
+.data-preview table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--t-sub);
+  line-height: 1.5;
+}
+.data-preview th {
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  font-weight: var(--w-medium);
+  text-align: left;
+  white-space: nowrap;
+}
+.data-preview th,
+.data-preview td {
+  padding: 7px var(--s-3);
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.data-preview tr:last-child td { border-bottom: none; }
+
 /* result rows */
 .run-block {
   border-radius: var(--r-sm);

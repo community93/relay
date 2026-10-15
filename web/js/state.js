@@ -427,7 +427,7 @@ export function activeEnv() {
 
 /* ---------- variables ---------- */
 
-export function varScope(nodeId, { environment = activeEnv(), runtime } = {}) {
+export function varScope(nodeId, { environment = activeEnv(), runtime, dataRow } = {}) {
   const scope = new Map();
   scope.sources = new Map();
   scope.used = new Map();
@@ -452,6 +452,12 @@ export function varScope(nodeId, { environment = activeEnv(), runtime } = {}) {
       scope.sources.set('baseUrl', `环境 · ${env.name}`);
       scope.sources.set('base_url', `环境 · ${env.name}`);
     }
+  }
+  // 运行计划的数据文件：当前行的列值。排在环境之后、运行期提取之前 —— 一轮
+  // 里某个请求提取出的新值（登录拿到的 token）比 CSV 里的旧值更有资格说话。
+  for (const [key, value] of dataRow || []) {
+    scope.set(key, String(value));
+    scope.sources.set(key, '数据文件');
   }
   for (const [key, value] of runtime || []) {
     if (value === null) scope.delete(key);

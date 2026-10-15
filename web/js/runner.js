@@ -4,7 +4,7 @@
 // 定时只是替你把「立即运行」按一次。所以这里刻意没有第二套数据 —— 步骤表每次都从
 // 当前的树现算，改了树就是下一次运行的顺序，不会出现"计划里还留着老排序"。
 
-import { el, icon, toast, duration, bytes, confirmDialog, segmented, toggle, prompt, row as fieldRow } from './ui.js';
+import { el, icon, toast, duration, bytes, confirmDialog, segmented, toggle, prompt, row as fieldRow, filePicker } from './ui.js';
 import { selectField, menu } from './menu.js';
 import * as api from './api.js';
 import { sortableRow } from './sorting.js';
@@ -13,6 +13,7 @@ import { changeList } from './undo.js';
 import { captureRunRequest, captureRunResponse, captureRunChecks, boundRunDetails, openRunEntry } from './run-details.js';
 import { requestUrl } from './preview.js';
 import { evaluateChecks } from './checks.js';
+import { dataFileOf, dataMapOf, buildDataFile } from './datafile.js';
 import { activeEnv } from './state.js';
 import {
   state,
@@ -134,6 +135,10 @@ export async function runRunner(runner, { trigger = 'manual', allowedHosts = [] 
     toast('这个计划里没有可执行的请求', 'err', 3200);
     return null;
   }
+  // 数据文件循环：CSV 每行跑一遍整个计划，按文件顺序从上到下。行列出的变量在
+  // 这一轮里优先于环境（见 varScope），提取器当轮拿到的值又优先于它。
+  const data = dataFileOf(runner);
+  const iterations = data ? data.rows.length : 1;
   const run = {
     id: uid('rec'),
     runnerId: runner.id,
@@ -144,35 +149,39 @@ export async function runRunner(runner, { trigger = 'manual', allowedHosts = [] 
     entries: [],
     totals: { ran: 0, passed: 0, failed: 0, skipped: 0 },
   };
-  const session = { runId: run.id, run, index: 0, total: steps.length, cancelled: false, execId: null, current: null };
-  const context = { environment: activeEnv() ? structuredClone(activeEnv()) : null, runtime: new Map() };
+  if (data) { run.dataFile = data.fileName; run.iterations = iterations; }
+  const session = { runId: run.id, run, index: 0, total: steps.length * iterations, cancelled: false, execId: null, current: null, iterations };
+  const context = { environment: activeEnv() ? structuredClone(activeEnv()) : null, runtime: new Map(), dataRow: data ? dataMapOf(data, 0) : null };
   run.environmentId = context.environment?.id;
   run.environmentName = context.environment?.name || '无环境';
   sessions.set(runner.id, session);
   repaint();
 
-  for (let i = 0; i < steps.length; i += 1) {
-    if (session.cancelled) {
-      run.cancelled = true;
-      break;
-    }
-    const step = steps[i];
-    const draft0 = step.node.request || {};
-    const entry = {
-      at: Date.now(),
-      collectionName: step.collectionName,
-      name: step.node.name || draft0.name || '未命名请求',
-      nodeId: step.node.id,
-      method: draft0.method || 'GET',
-      url: draft0.url || '',
-      status: 0,
-      ok: false,
-      timeMs: 0,
-      sizeBytes: 0,
-    };
-    run.entries.push(entry);
-    session.index = i;
-    session.current = entry;
+  iterationLoop: for (let iter = 0; iter < iterations; iter += 1) {
+    if (data) context.dataRow = dataMapOf(data, iter);
+    for (let i = 0; i < steps.length; i += 1) {
+      if (session.cancelled) {
+        run.cancelled = true;
+        break iterationLoop;
+      }
+      const step = steps[i];
+      const draft0 = step.node.request || {};
+      const entry = {
+        at: Date.now(),
+        collectionName: step.collectionName,
+        name: step.node.name || draft0.name || '未命名请求',
+        nodeId: step.node.id,
+        method: draft0.method || 'GET',
+        url: draft0.url || '',
+        status: 0,
+        ok: false,
+        timeMs: 0,
+        sizeBytes: 0,
+      };
+      if (data) entry.iteration = iter + 1;
+      run.entries.push(entry);
+      session.index = iter * steps.length + i;
+      session.current = entry;
 
     if (step.skip) {
       entry.skipped = true;
@@ -206,7 +215,7 @@ export async function runRunner(runner, { trigger = 'manual', allowedHosts = [] 
       run.totals.ran += 1;
       session.current = null;
       repaint();
-      if(runner.stopOnError){run.stoppedAfter=run.totals.ran;break;}
+      if(runner.stopOnError){run.stoppedAfter=run.totals.ran;break iterationLoop;}
       continue;
     }
     // 记录解析后的地址：一次运行该说清它真正打了哪里，`{{baseUrl}}` 那种写法在
@@ -253,7 +262,7 @@ export async function runRunner(runner, { trigger = 'manual', allowedHosts = [] 
 
     pushHistory({
       kind: 'http',
-      name: `${runner.name} · ${entry.name}`.slice(0, 90),
+      name: `${runner.name}${data ? ` · 第${iter + 1}行` : ''} · ${entry.name}`.slice(0, 90),
       method: entry.method,
       url: built.draft.url,
       status: entry.status,
@@ -268,9 +277,10 @@ export async function runRunner(runner, { trigger = 'manual', allowedHosts = [] 
 
     if (!entry.ok && runner.stopOnError) {
       run.stoppedAfter = run.totals.ran;
-      break;
+      break iterationLoop;
     }
-    if (runner.delayMs > 0 && i < steps.length - 1) await wait(runner.delayMs, session);
+    if (runner.delayMs > 0 && (i < steps.length - 1 || iter < iterations - 1)) await wait(runner.delayMs, session);
+    }
   }
 
   run.finishedAt = Date.now();
@@ -283,7 +293,7 @@ export async function runRunner(runner, { trigger = 'manual', allowedHosts = [] 
 
   const head = run.cancelled ? '已中断' : run.stoppedAfter ? '遇错停下' : run.totals.failed ? `${run.totals.failed} 个失败` : '全部通过';
   toast(
-    `${runner.name}：跑了 ${run.totals.ran} 个，${head}` + (run.totals.skipped ? `，跳过 ${run.totals.skipped} 个` : ''),
+    `${runner.name}：${data ? `${iterations} 轮数据跑` : '跑'}了 ${run.totals.ran} 个，${head}` + (run.totals.skipped ? `，跳过 ${run.totals.skipped} 个` : ''),
     run.totals.failed || run.cancelled ? 'err' : 'ok',
     5200
   );
@@ -660,6 +670,54 @@ function planOrder(runner) {
   return { selector: '.plan-step', get: () => sourcesOf(runner), set: list => { runner.sources = list; }, domain: 'runners', label: '计划排序', name: '拖拽执行步骤', valid: () => state.runners.includes(runner) };
 }
 
+/// 数据文件卡：一个 CSV 就是"这个计划跑 N 遍"。解析结果随计划持久化，定时运行
+/// 不依赖原文件还在；行变量按文件顺序覆盖环境变量。
+function dataCard(runner) {
+  const data = dataFileOf(runner);
+  const setData = (value) => {
+    if (value) runner.data = value;
+    else delete runner.data;
+    touch('runners');
+    emit('rerender');
+  };
+  const picker = filePicker({
+    accept: '.csv,text/csv',
+    buttonText: data ? '换一个 CSV' : '选择 CSV',
+    hint: data ? '' : '第一行是列名，之后每行跑一遍计划',
+    onPick: async (handle) => {
+      const parsed = buildDataFile(handle.name, await handle.arrayBuffer());
+      setData(parsed);
+      toast(`已按 ${parsed.rows.length} 行数据循环：第 1 行 → 第 ${parsed.rows.length} 行`, 'ok', 4600);
+    },
+  });
+  if (!data) {
+    return el('div', { class: 'group' }, [
+      el('div', { class: 'group-head' }, [el('span', { class: 'group-title', text: '数据文件（可选）' })]),
+      el('div', { class: 'group-body' }, [picker]),
+    ]);
+  }
+  const shown = data.rows.slice(0, 3);
+  return el('div', { class: 'group' }, [
+    el('div', { class: 'group-head' }, [
+      el('span', { class: 'group-title', text: '数据文件' }),
+      el('button', { class: 'btn sm ghost', text: '移除', title: '回到单遍运行', onclick: () => setData(null) }),
+    ]),
+    el('div', { class: 'group-body' }, [
+      el('p', { class: 'hint' }, [
+        el('span', { text: `${data.fileName} · ${data.rows.length} 行 × ${data.header.length} 列${data.encoding === 'gbk' ? ' · 按 GBK 读取' : ''}` }),
+        el('span', { class: 'faint small', text: `　按文件顺序：第 1 行 → 第 ${data.rows.length} 行；列名写成 {{${data.header[0]}}} 即被当轮的值替换` }),
+      ]),
+      el('div', { class: 'data-preview' }, [
+        el('table', {}, [
+          el('thead', {}, [el('tr', {}, data.header.map((name) => el('th', { text: name })))]),
+          el('tbody', {}, shown.map((row) => el('tr', {}, data.header.map((_, i) => el('td', { text: row[i] ?? '' }))))),
+        ]),
+      ]),
+      data.rows.length > shown.length ? el('p', { class: 'hint faint small', text: `预览前 ${shown.length} 行，共 ${data.rows.length} 行` }) : null,
+    ].filter(Boolean)),
+  ]);
+}
+
 function delayPicker(runner) {
   return selectField({
     value: String(runner.delayMs || 0),
@@ -762,6 +820,8 @@ function entryRow(entry, run) {
       el('span', { class: `badge method-${(entry.method || 'get').toLowerCase()}`, text: (entry.method || '').slice(0, 6) }),
       el('span', { class: 'name' }, [
         el('span', { text: entry.name || entry.url }),
+        // 数据循环里同一步骤每行出现一次，轮次跟在名字后面才能对上"这一轮是谁"。
+        entry.iteration ? el('span', { class: 'run-reason', text: `第 ${entry.iteration} 行` }) : null,
         // 跳过原因跟在名字后面：它属于"这一行是什么"。塞进耗时那一列会把下面
         // 所有数字都顶歪，三个数字列就对不齐了。
         entry.skipped ? el('span', { class: 'run-reason', text: entry.reason }) : null,
@@ -795,6 +855,7 @@ function runBlock(run) {
         el('span', { class: `run-mark ${tone}`, 'aria-hidden': 'true' }),
         el('span', { class: 'name', text: new Date(run.startedAt).toLocaleString('zh-CN', { hour12: false }) }),
         run.trigger === 'timer' ? el('span', { class: 'count', title: '由定时触发' }, [icon('clock')]) : null,
+        run.iterations ? el('span', { class: 'count', title: `数据文件：${run.dataFile}` , text: `${run.iterations} 行数据` }) : null,
         el('span', {
           class: 'run-col small',
           text: `${run.totals.passed} 过 / ${run.totals.failed} 败` + (run.totals.skipped ? ` / ${run.totals.skipped} 跳` : '') + (run.totals.cancelled ? ` / ${run.totals.cancelled} 取消` : ''),
@@ -833,11 +894,12 @@ export function renderRunnerTab(tab) {
     },
   });
 
+  const data = dataFileOf(runner);
   const head = el('div', { class: 'runner-head' }, [
     el('div', { class: 'runner-title' }, [
       title,
       el('p', { class: 'hint' }, [
-        el('span', { text: `${summary.sources} 个步骤 · ${summary.runnable} 个请求` }),
+        el('span', { text: `${summary.sources} 个步骤 · ${summary.runnable} 个请求${data ? ` · ${data.rows.length} 轮数据` : ''}` }),
         summary.skipped ? el('span', { class: 'faint small', text: `（另有 ${summary.skipped} 个不进队列）` }) : null,
       ]),
     ]),
@@ -896,5 +958,5 @@ export function renderRunnerTab(tab) {
     ),
   ]);
 
-  return el('div', { class: 'pane-scroll runner-pane', 'aria-busy':String(!!session) }, [head, progress, plan, runOptionsCard(runner), history]);
+  return el('div', { class: 'pane-scroll runner-pane', 'aria-busy':String(!!session) }, [head, progress, plan, dataCard(runner), runOptionsCard(runner), history]);
 }

@@ -156,7 +156,7 @@ Field IDs are `params:<key>`, `headers:<key>`, `body:<generated path>`, `respons
 
 Execution returns `{jobId,state:"running"}`. Poll until `completed`, `failed` or `cancelled`; inspect `result.ok`, each assertion and entry. Network/business failure can be a completed job with `result.ok:false`. Each job is session-local; up to8 active, most recent50 retained. AI connection off prevents new commands; already-started authorized executions continue and remain visible in Relay. Cancel them explicitly before disconnecting when needed.
 
-Runner data: `name`, `sources` (collection/folder/request IDs), `stopOnError`, `delayMs`(0–60000). Schedule cannot be enabled via API. Request/document automatic execution supports HTTP; SSE/WS configurations can be created and opened for interactive debugging. No script execution or arbitrary file access is exposed.
+Runner data: `name`, `sources` (collection/folder/request IDs), `stopOnError`, `delayMs`(0–60000). Schedule cannot be enabled via API. The CSV data file (if the user attached one to the plan) is part of the plan's stored data but cannot be created or changed through the API — it is chosen from a local file in the UI; `runner.execute` runs its iterations exactly as the manual button would. Request/document automatic execution supports HTTP; SSE/WS configurations can be created and opened for interactive debugging. No script execution or arbitrary file access is exposed.
 
 ## Review and export
 

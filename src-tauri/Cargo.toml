@@ -1,6 +1,6 @@
 [package]
 name = "relay"
-version = "0.1.17"
+version = "0.1.18"
 description = "Relay - a lean API client"
 authors = ["qoder"]
 edition = "2021"

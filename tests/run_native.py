@@ -15,7 +15,7 @@ DATA = os.path.realpath(os.path.join(QA, "native-data"))
 EXE = os.environ.get("RELAY_TEST_EXE", os.path.join(ROOT, "dist", "Relay.exe"))
 PORT = int(os.environ.get("RELAY_CDP_PORT", "9225"))
 SUITES = ["workspace", "usability", "variables", "preview", "import_names",
-          "response_layout", "body_editor", "interaction_design", "document_design", "delivery", "data_directory", "typography", "themes", "list_sorting", "list_sorting_restart", "protocol_persistence", "protocol_restart", "apple_interactions", "run_details", "visual_craft", "protocol_import", "motion_cascade", "checks_chain", "checks_restart", "format_import", "automation", "automation_restart"]
+          "response_layout", "body_editor", "interaction_design", "document_design", "delivery", "data_directory", "typography", "themes", "list_sorting", "list_sorting_restart", "protocol_persistence", "protocol_restart", "apple_interactions", "run_details", "runner_data", "visual_craft", "protocol_import", "motion_cascade", "checks_chain", "checks_restart", "format_import", "automation", "automation_restart"]
 
 def ready():
     try:
