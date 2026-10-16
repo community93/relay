@@ -80,8 +80,39 @@ export async function boot() {
   renderSidebar();
   renderEnvSwitcher(document.getElementById('env-slot'));
   startScheduler();
+  installTrayBridge();
+  fillVersionLabel();
   const { installAutomation } = await import('./automation.js');
   await installAutomation();
+}
+
+function fillVersionLabel() {
+  const span = document.querySelector('.navigation-footer-version');
+  if (!span) return;
+  window.__TAURI__?.app?.getVersion?.()
+    .then((version) => { span.textContent = `v${version}`; })
+    .catch(() => {});
+}
+
+/* 关窗 → Rust 把窗口藏起来并广播 close-requested，这里按设置决定收进托盘还是
+ * 真退出。收进托盘时回来的第一眼要说一声，不然用户以为应用没了、定时也停了。 */
+let trayHintPending = false;
+function installTrayBridge() {
+  const tauri = window.__TAURI__;
+  tauri?.event?.listen?.('close-requested', async () => {
+    if (state.settings.hideToTray === false) {
+      tauri.core.invoke('app_exit');
+      return;
+    }
+    trayHintPending = true;
+    tauri.core.invoke('window_hide').catch(() => {});
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && trayHintPending) {
+      trayHintPending = false;
+      toast('Relay 收进了托盘，定时计划继续运行。可在设置里改为直接退出。', 'ok', 6000);
+    }
+  });
 }
 
 function buildShell() {
@@ -128,7 +159,8 @@ function buildShell() {
         el('div', { class: 'navigation-footer' }, [
           el('span', { class: 'navigation-footer-mark', html: BRAND_SVG, 'aria-hidden': 'true' }),
           el('span', { class: 'navigation-footer-name', text: 'Relay' }),
-          el('span', { class: 'navigation-footer-version', text: 'v0.1.17' }),
+          // 版本号跟着 tauri.conf 走，不再每次发版手改这里
+          el('span', { class: 'navigation-footer-version', text: '', dataset: { appVersion: '' } }),
         ]),
       ]),
       el('div', { class: 'col-resizer', id: 'col-resizer', title: '拖动调整侧栏宽度，双击复位' }),

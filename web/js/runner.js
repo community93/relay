@@ -14,6 +14,7 @@ import { captureRunRequest, captureRunResponse, captureRunChecks, boundRunDetail
 import { requestUrl } from './preview.js';
 import { evaluateChecks } from './checks.js';
 import { dataFileOf, dataMapOf, buildDataFile } from './datafile.js';
+import { buildWsRequest } from './ws.js';
 import { activeEnv } from './state.js';
 import {
   state,
@@ -43,9 +44,7 @@ function collect(container, collectionName, out) {
       continue;
     }
     const step = { node: child, collectionName };
-    if (child.kind === 'ws') step.skip = 'WebSocket 是长连接，不进串行队列';
-    else if (child.protocol === 'sse') step.skip = 'SSE 是流，不进串行队列';
-    else if (!String((child.request || {}).url || '').trim()) step.skip = '没有填 URL';
+    if (!String((child.request || {}).url || '').trim()) step.skip = '没有填 URL';
     out.push(step);
   }
 }
@@ -71,9 +70,7 @@ export function stepsForSource(id) {
   const node = hit.node;
   if (node.kind === 'collection' || node.kind === 'folder') return collectionSteps(node).map((step) => ({ ...step, collectionName: label }));
   const step = { node, collectionName: label };
-  if (node.kind === 'ws') step.skip = 'WebSocket 是长连接，不进串行队列';
-  else if (node.protocol === 'sse') step.skip = 'SSE 是流，不进串行队列';
-  else if (!String((node.request || {}).url || '').trim()) step.skip = '没有填 URL';
+  if (!String((node.request || {}).url || '').trim()) step.skip = '没有填 URL';
   return [step];
 }
 
@@ -125,6 +122,105 @@ function wait(ms, session) {
   });
 }
 
+/* ---- 长连接步骤 ----
+ * SSE 建连后驻留一小段收集事件再主动断开；WS 只验证握手。两者都把结果折算成
+ * HTTP 形状（status/bodyText/error），这样检查、提取、详情展示全部复用同一套。 */
+
+const SSE_SOAK_MS = 3000;
+const WS_HANDSHAKE_TIMEOUT_MS = 15000;
+
+async function runSseStep({ step, entry, session, built, execId }) {
+  const firstByteMs = state.settings.sseFirstByteMs || 15000;
+  const response = { status: 0, headers: [], bodyText: '', isText: true, sizeBytes: 0, error: null, errorKind: null, timeMs: 0, eventCount: 0 };
+  let open = false;
+  let streamError = null;
+  let done = false;
+  const started = Date.now();
+  api.streamSse({
+    draft: built.draft,
+    execId,
+    firstByteTimeoutMs: firstByteMs,
+    streamFormat: step.node.streamFormat || 'auto',
+    onEvent: (event) => {
+      if (done) return;
+      if (event.kind === 'open') {
+        open = true;
+        response.status = event.status || 0;
+        response.headers = event.headers || [];
+      } else if (event.kind === 'message') {
+        response.eventCount += 1;
+        response.sizeBytes = event.bytes || response.sizeBytes;
+        response.bodyText = `${response.bodyText}${event.data || ''}\n`;
+        if (response.bodyText.length > 65536) response.bodyText = response.bodyText.slice(0, 65536);
+      } else if (event.kind === 'error') {
+        streamError = event.message || 'SSE 连接失败';
+      }
+    },
+  }).catch((error) => { if (!done) streamError = String((error && error.message) || error); });
+
+  // 等建连（首帧超时由 Rust 侧主动报错），建连后再驻留一会儿收集事件——
+  // 太短可能一条事件都没等到，太长会把整份计划拖住。
+  while (!open && !streamError && !session.cancelled && Date.now() - started < firstByteMs) await wait(80, session);
+  const soakEnd = Date.now() + SSE_SOAK_MS;
+  while (open && !streamError && !session.cancelled && Date.now() < soakEnd) await wait(80, session);
+  done = true;
+  await api.cancel(execId).catch(() => {});
+  response.timeMs = Date.now() - started;
+  if (session.cancelled) {
+    response.error = '请求已取消';
+    response.errorKind = 'cancelled';
+  } else if (streamError) {
+    response.error = streamError;
+    response.errorKind = 'server';
+  }
+  return response;
+}
+
+async function runWsStep({ step, entry, session, built, req }) {
+  const connId = uid('wsrun');
+  const events = [];
+  const response = { status: 0, headers: [], bodyText: '', isText: true, sizeBytes: 0, error: null, errorKind: null, timeMs: 0 };
+  let settled = false;
+  const started = Date.now();
+  try {
+    await api.wsConnect({ req: { ...req, connId }, onEvent: (event) => { if (!settled) events.push(event); } });
+  } catch (error) {
+    response.error = String((error && error.message) || error);
+    response.errorKind = 'client';
+    response.timeMs = Date.now() - started;
+    return response;
+  }
+  const deadline = Date.now() + Math.min(req.timeoutMs || WS_HANDSHAKE_TIMEOUT_MS, 60000);
+  while (!events.some((event) => event.kind === 'open' || event.kind === 'error' || event.kind === 'closed')) {
+    if (session.cancelled || Date.now() > deadline) break;
+    await wait(80, session);
+  }
+  settled = true;
+  const open = events.find((event) => event.kind === 'open');
+  if (open) {
+    response.status = 101;
+    response.headers = open.headers || [];
+    await api.wsClose(connId).catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await api.wsDisconnect(connId).catch(() => {});
+  } else {
+    await api.wsDisconnect(connId).catch(() => {});
+    const bad = events.find((event) => event.kind === 'error' || event.kind === 'closed');
+    if (session.cancelled) {
+      response.error = '请求已取消';
+      response.errorKind = 'cancelled';
+    } else if (bad) {
+      response.error = bad.message || (bad.kind === 'closed' ? `连接被对端关闭${bad.code ? `（代码 ${bad.code}）` : ''}` : '连接失败');
+      response.errorKind = 'server';
+    } else {
+      response.error = '握手超时';
+      response.errorKind = 'timeout';
+    }
+  }
+  response.timeMs = Date.now() - started;
+  return response;
+}
+
 export async function runRunner(runner, { trigger = 'manual', allowedHosts = [] } = {}) {
   if (sessions.has(runner.id)) {
     toast('这个计划正在运行中', 'err', 2600);
@@ -166,12 +262,14 @@ export async function runRunner(runner, { trigger = 'manual', allowedHosts = [] 
       }
       const step = steps[i];
       const draft0 = step.node.request || {};
+      const isWs = step.node.kind === 'ws';
+      const isSse = step.node.protocol === 'sse';
       const entry = {
         at: Date.now(),
         collectionName: step.collectionName,
         name: step.node.name || draft0.name || '未命名请求',
         nodeId: step.node.id,
-        method: draft0.method || 'GET',
+        method: isWs ? 'WS' : draft0.method || 'GET',
         url: draft0.url || '',
         status: 0,
         ok: false,
@@ -199,7 +297,8 @@ export async function runRunner(runner, { trigger = 'manual', allowedHosts = [] 
       refId: step.node.id,
       auth: JSON.parse(JSON.stringify(step.node.auth || { kind: 'inherit' })),
     };
-    const built = buildSendDraft(submitted, context);
+    const wsBuild = isWs ? buildWsRequest({ ...submitted, protocol: 'ws' }, context) : null;
+    const built = isWs ? wsBuild.preview : buildSendDraft(submitted, context);
     const rules = built.preparedChecks;
     entry.details = captureRunRequest(submitted, built);
     boundRunDetails(run, state.runs);
@@ -227,13 +326,19 @@ export async function runRunner(runner, { trigger = 'manual', allowedHosts = [] 
     repaint();
     const started = Date.now();
     try {
-      const response = await api.execute(built.draft, session.execId, allowedHosts);
+      const response = isWs
+        ? await runWsStep({ step, entry, session, built, req: wsBuild.req })
+        : isSse
+          ? await runSseStep({ step, entry, session, built, execId: session.execId })
+          : await api.execute(built.draft, session.execId, allowedHosts);
       if (entry.details) captureRunResponse(entry.details, response);
       entry.status = response.status || 0;
       entry.timeMs = response.timeMs || Date.now() - started;
       entry.sizeBytes = response.sizeBytes || 0;
       entry.error = response.error || null;
       entry.errorKind = response.errorKind || null;
+      if (isWs && entry.status === 101) entry.note = '握手成功';
+      if (isSse && !entry.error) entry.note = `收到 ${response.eventCount || 0} 条事件`;
       const result = evaluateChecks(rules, response, context.runtime);
       entry.ok = result.ok;
       entry.outcome = result.outcome;
@@ -261,7 +366,7 @@ export async function runRunner(runner, { trigger = 'manual', allowedHosts = [] 
     else run.totals.failed += 1;
 
     pushHistory({
-      kind: 'http',
+      kind: isWs ? 'ws' : 'http',
       name: `${runner.name}${data ? ` · 第${iter + 1}行` : ''} · ${entry.name}`.slice(0, 90),
       method: entry.method,
       url: built.draft.url,
@@ -271,7 +376,7 @@ export async function runRunner(runner, { trigger = 'manual', allowedHosts = [] 
       errorKind: entry.errorKind,
       snapshot: JSON.parse(JSON.stringify(draft0)),
       auth: JSON.parse(JSON.stringify(step.node.auth || { kind: 'inherit' })),
-      protocol: 'http',
+      protocol: isWs ? 'ws' : isSse ? 'sse' : 'http',
     });
     repaint();
 
@@ -434,6 +539,19 @@ export async function catchUp() {
     toast(`定时触发：${runner.name}`, 'ok', 2600);
     runRunner(runner, { trigger: 'timer' });
   }
+  updateTrayHint(now);
+}
+
+/* 应用收进托盘后这块界面看不见了，托盘菜单里的"下次触发"就是仅剩的可见状态，
+ * 所以每个心跳都刷一遍；invoke 失败（比如纯浏览器预览）就安静放过。 */
+function updateTrayHint(now = Date.now()) {
+  const enabled = state.runners
+    .filter((runner) => runner.schedule?.enabled)
+    .map((runner) => ({ name: runner.name, due: dueAt(runner.schedule, now) }))
+    .filter((item) => Number.isFinite(item.due))
+    .sort((a, b) => a.due - b.due);
+  const text = enabled.length ? `下次 ${stamp(enabled[0].due)} · ${enabled[0].name}` : '无';
+  window.__TAURI__?.core?.invoke?.('tray_set_next', { text }).catch?.(() => {});
 }
 
 export function startScheduler() {
@@ -826,6 +944,7 @@ function entryRow(entry, run) {
         // 所有数字都顶歪，三个数字列就对不齐了。
         entry.skipped ? el('span', { class: 'run-reason', text: entry.reason }) : null,
         entry.error && !entry.skipped ? el('span', { class: 'run-reason', text: entry.error }) : null,
+        entry.note && !entry.error && !entry.skipped ? el('span', { class: 'run-reason', text: entry.note }) : null,
         entry.checkSummary?.total || entry.checkSummary?.extractionTotal ? el('span', { class: 'run-reason', text: `检查 ${entry.checkSummary.passed}/${entry.checkSummary.total} · 提取 ${entry.checkSummary.extracted}/${entry.checkSummary.extractionTotal}` }) : null,
       ]),
       el('span', { class: 'run-col', text: entry.pending?'执行中':entry.skipped ? '跳过' : entry.outcome === 'cancelled' ? '已取消' : entry.status ? String(entry.status) : entry.errorKind || '失败' }),

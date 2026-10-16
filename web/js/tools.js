@@ -557,6 +557,7 @@ export function openSettingsDialog() {
   const ssl = toggle(state.settings.sslVerify, (on) => (pending.sslVerify = on), '校验 SSL 证书');
   const redirects = toggle(state.settings.followRedirects, (on) => (pending.followRedirects = on), '自动跟随重定向');
   const jar = toggle(state.settings.cookieJar, (on) => (pending.cookieJar = on), '共享 Cookie');
+  const hideToTray = toggle(state.settings.hideToTray !== false, (on) => (pending.hideToTray = on), '关闭窗口时收进托盘');
   const pathHost = el('span', { class: 'mono small' });
   api.dataPath().then((value) => (pathHost.textContent = value));
   const changeDirectory = () => {
@@ -583,6 +584,7 @@ export function openSettingsDialog() {
     sslVerify: state.settings.sslVerify,
     followRedirects: state.settings.followRedirects,
     cookieJar: state.settings.cookieJar,
+    hideToTray: state.settings.hideToTray !== false,
   };
 
   const sections = [
@@ -595,6 +597,7 @@ export function openSettingsDialog() {
         el('div', { class: 'group' }, [
           row('外观', theme),
           row('界面字号', uiZoom),
+          toggleRow(hideToTray, '关闭窗口时收进托盘', '定时计划在后台继续运行。关掉后，点关闭窗口就是退出。'),
         ]),
         el('div', { class: 'theme-section' }, [el('h3', { text: '主题配色' }), palette]),
       ],
@@ -693,6 +696,7 @@ export function openSettingsDialog() {
       state.settings.sslVerify = pending.sslVerify;
       state.settings.followRedirects = pending.followRedirects;
       state.settings.cookieJar = pending.cookieJar;
+      state.settings.hideToTray = pending.hideToTray;
       touch('settings');
       try { await flushDomain('settings', { strict: true }); }
       catch (error) { state.settings = previousSettings; throw error; }

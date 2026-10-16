@@ -54,6 +54,19 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail }); 
   check('missing cell maps to empty string', row1.get('city') === '');
   check('out-of-range row maps all empty', d.dataMapOf(data, 9).get('user') === '');
 
+  // buildDataFromRows：AI 接口给的行数组落成与 CSV 相同的结构
+  const ai = d.buildDataFromRows(['user', 'city'], [['tom', '上海'], ['li']]);
+  check('AI rows share the CSV shape', ai.fileName === 'AI 提供的数据' && ai.header.join(',') === 'user,city' && ai.rows[0].join(',') === 'tom,上海');
+  check('AI short rows pad to empty', ai.rows[1][1] === '');
+  const aiAuto = d.buildDataFromRows(undefined, [['tom', '上海']]);
+  check('AI header defaults to numbered columns', aiAuto.header.join(',') === '列1,列2');
+  const aiPad = d.buildDataFromRows(['user'], [['tom', '上海']]);
+  check('AI header pads to row width', aiPad.header.join(',') === 'user,列2');
+  let aiTooMany = null; try { d.buildDataFromRows(['a'], Array.from({ length: 2001 }, () => ['x'])); } catch (e) { aiTooMany = e.message; }
+  check('AI row limit error names current and cap', /最多 2000 行/.test(aiTooMany) && /2001/.test(aiTooMany), aiTooMany);
+  let aiBad = null; try { d.buildDataFromRows(['a'], 'tom,上海'); } catch (e) { aiBad = e.message; }
+  check('AI non-array rows explain the shape', /行数组/.test(aiBad), aiBad);
+
   const failed = results.filter(r => !r.ok);
   console.log(`${results.length - failed.length}/${results.length} passed`);
   process.exit(failed.length ? 1 : 0);

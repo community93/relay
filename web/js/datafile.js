@@ -93,6 +93,29 @@ export function dataFileOf(runner) {
   return data && Array.isArray(data.header) && Array.isArray(data.rows) && data.rows.length ? data : null;
 }
 
+/// AI 接口给的不是文件而是行数组（header + rows），落成与本地选 CSV 完全相同的
+/// 结构，执行语义也就一致：同样受行列上限约束，报错同样带现状与上限。
+export function buildDataFromRows(header, rows) {
+  if (!Array.isArray(rows) || !rows.length) throw new Error('dataFile.rows 必须是非空的行数组，例如 [[\"tom\",\"上海\"],[\"li\",\"北京\"]]');
+  if (rows.length > DATA_LIMITS.rows) throw new Error(`行太多：最多 ${DATA_LIMITS.rows} 行，收到 ${rows.length} 行，请拆分后分批写入`);
+  if (header !== undefined && header !== null && !Array.isArray(header)) throw new Error('dataFile.header 必须是字符串数组，或省略让它按「列1、列2」编号');
+  const width = rows.reduce((max, row) => Math.max(max, Array.isArray(row) ? row.length : 0), 0);
+  if (width > DATA_LIMITS.columns) throw new Error(`列太多：最多 ${DATA_LIMITS.columns} 列，收到 ${width} 列`);
+  const cells = rows.map((row, index) => {
+    if (!Array.isArray(row)) throw new Error(`第 ${index + 1} 行必须是数组，收到 ${typeof row}`);
+    return row.map((cell) => (cell == null ? '' : String(cell)));
+  });
+  const headerRow = (header && header.length ? header : cells[0].map((_, i) => `列${i + 1}`)).slice();
+  while (headerRow.length < width) headerRow.push(`列${headerRow.length + 1}`);
+  const names = normalizeHeader(headerRow);
+  return {
+    fileName: 'AI 提供的数据',
+    encoding: 'utf-8',
+    header: names,
+    rows: cells.map((row) => names.map((_, i) => row[i] ?? '')),
+  };
+}
+
 /// 每轮迭代的作用域覆盖层：列名 → 当前行的值。短行缺的格子按空串算。
 export function dataMapOf(data, rowIndex) {
   const map = new Map();

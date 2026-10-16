@@ -383,16 +383,16 @@ function drawSettings(tab, ws, host) {
   );
 }
 
-export function buildWsRequest(tab) {
+export function buildWsRequest(tab, context = {}) {
   const ws=wsState(tab);
   // Share URL/query shaping, inherited headers, auth and settings with HTTP.
   // A WS handshake has no HTTP request body to interpolate.
-  const built=buildSendDraft({...tab,draft:{...tab.draft,method:'GET',body:{mode:'none'}}});
+  const built=buildSendDraft({...tab,draft:{...tab.draft,method:'GET',body:{mode:'none'}}}, context);
   built.draft.settings.timeoutMs=tab.draft.settings?.timeoutMs??state.settings.timeoutMs;
   const url=built.draft.url.replace(/^https:/i,'wss:').replace(/^http:/i,'ws:');
   const query=built.draft.params.map(p=>`${encodeURIComponent(p.key)}=${encodeURIComponent(p.value)}`).join('&');
   const finalUrl=url+(query?(url.includes('?')?'&':'?')+query:'');
-  const scope=varScope(tab.refId),missing=new Set(built.missing);
+  const scope=varScope(tab.refId, context),missing=new Set(built.missing);
   const subprotocols=(tab.draft.subprotocols?.length?tab.draft.subprotocols:
     built.draft.headers.filter(h=>/^sec-websocket-protocol$/i.test(h.key)).flatMap(h=>h.value.split(',')))
     .map(value=>{const result=render(value.trim(),scope);for(const key of result.missing)missing.add(key);return result.text;}).filter(Boolean);

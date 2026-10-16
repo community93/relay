@@ -62,7 +62,7 @@ function check(name,ok,detail){results.push({name,ok:!!ok,detail});console.log(`
   await dialog.getByRole('button',{name:'下一个请求',exact:true}).click();await dialog.getByRole('radio',{name:'响应',exact:true}).click();
   check('变量校验失败明确没有收到响应',await dialog.locator('.preview-empty').innerText().then(t=>t.includes('缺少变量')));
   await dialog.getByRole('button',{name:'下一个请求',exact:true}).click();
-  check('跳过项明确说明原因',await dialog.innerText().then(t=>t.includes('已跳过')&&t.includes('SSE')));
+  check('SSE 步骤真的跑了并保存了事件流证据',await dialog.innerText().then(t=>t.includes('200')&&t.includes('事件 1')&&!t.includes('已跳过')));
   await page.keyboard.press('Escape');await page.waitForTimeout(200);
   await page.evaluate(async()=>{
    const slow=s.newRequestNode('进行中的请求',{url:'http://127.0.0.1:8899/slow'});s.state.collections[0].children.push(slow);window.livePlan=s.newRunner('实时详情');livePlan.sources=[slow.id];s.state.runners.push(livePlan);s.openRunner(livePlan);window.livePromise=r.runRunner(livePlan);

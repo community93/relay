@@ -27,6 +27,8 @@ export const state = {
     sseFirstByteMs: 15000,
     uiZoom: 1,
     sidebarWidth: 272,
+    // 关窗收进托盘是定时计划能常驻的前提，所以默认开；不要的人可在设置里改回真退出。
+    hideToTray: true,
   },
   tabs: [],
   activeTabId: null,

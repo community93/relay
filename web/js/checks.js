@@ -149,11 +149,13 @@ export function evaluateChecks(rules, response, runtime) {
   }
   const hasStatus = rules.checks.some(rule => rule.kind === 'status');
   const transportOk = !networkError;
-  const httpOk = transportOk && response.status >= 200 && response.status < 400;
+  // 101 是 WebSocket 握手的成功状态：1xx 虽在普通 HTTP 成功区间之外，但对长连接
+  // 步骤来说"握手完成"就是它的 200。
+  const httpOk = transportOk && (response.status === 101 || (response.status >= 200 && response.status < 400));
   const ok = transportOk && (hasStatus || httpOk) && checks.every(row => row.ok) && extractions.every(row => row.ok);
   // A failed business check must not promote untrusted values into the next step.
   if (ok) for (const row of extractions) runtime?.set(row.name, row.value);
   return { ok, httpOk, transportOk, checks, extractions, passed: checks.filter(row => row.ok).length,
-    reason: networkError ? response.error || '未收到响应' : !hasStatus && !httpOk ? `HTTP ${response.status} · 默认接受 200–399` : '',
+    reason: networkError ? response.error || '未收到响应' : !hasStatus && !httpOk ? `HTTP ${response.status} · 默认接受 101 或 200–399` : '',
     outcome: networkError ? response.errorKind === 'cancelled' ? 'cancelled' : 'network-error' : ok ? 'passed' : !hasStatus && !httpOk ? 'http-error' : 'check-failed' };
 }

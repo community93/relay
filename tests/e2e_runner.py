@@ -488,9 +488,9 @@ plan = js("""(async () => {
     summary: m.planSummary(r),
   });
 })()""" % json.dumps(runner_id))
-h.check("步骤数 = 两个集合展开后的全部节点", plan["total"] == 8 and plan["runnable"] == 6, plan)
-h.check("SSE 与 WS 不进串行队列而是记为跳过", plan["skips"] == ["WebSocket 是长连接，不进串行队列"] or len(plan["skips"]) == 2, plan["skips"])
-h.check("跳过都写明原因而不是默默少一条", all("不进串行队列" in s or "URL" in s for s in plan["skips"]), plan["skips"])
+h.check("步骤数 = 两个集合展开后的全部节点", plan["total"] == 8 and plan["runnable"] == 8, plan)
+h.check("SSE 与 WS 也进串行队列而不是被跳过", plan["skips"] == [], plan["skips"])
+h.check("没有步骤被默默丢掉（总数与队列一致）", plan["summary"]["runnable"] == plan["total"], plan["summary"])
 h.check("文件夹里的请求也在队列里（深度优先）", "A4" in plan["names"], plan["names"])
 h.check("集合顺序就是计划里点的顺序", plan["cols"][0] == "甲集合" and plan["cols"][-1] == "乙集合", plan["cols"])
 h.check("执行顺序卡片按 sources 顺序列出两个集合", plan["rows"] == ["甲集合", "乙集合"], plan["rows"])
@@ -602,11 +602,11 @@ sleep(0.4)
 
 run1 = fire_and_wait()
 h.check("跑完留下一条运行记录", bool(run1.get("finishedAt")), run1.get("id"))
-h.check("六个可执行请求全部通过", run1["totals"]["passed"] == 6 and run1["totals"]["failed"] == 0, run1["totals"])
-h.check("两个不可执行节点被列出来而不是凭空消失", run1["totals"]["skipped"] == 2, run1["totals"])
+h.check("八个步骤（含 SSE/WS）全部通过", run1["totals"]["passed"] == 8 and run1["totals"]["failed"] == 0, run1["totals"])
+h.check("长连接步骤也进了队列，没有任何跳过", run1["totals"]["skipped"] == 0 and run1["totals"]["ran"] == 8, run1["totals"])
 h.check("运行顺序 = 当前步骤表顺序", [e["name"] for e in run1["entries"]] == plan["names"], [e["name"] for e in run1["entries"]])
-h.check("每一步都真的上了线（拿到 200）",
-        all(e["status"] == 200 for e in run1["entries"] if not e.get("skipped")),
+h.check("每一步都真的上了线（HTTP 200 / WS 101）",
+        all(e["status"] in (200, 101) for e in run1["entries"] if not e.get("skipped")),
         [(e["name"], e["status"], e.get("error")) for e in run1["entries"]][:4])
 h.check("串行跑过的请求进历史并带上计划名",
         js("(async () => { const s = await import('/js/state.js'); return JSON.stringify(s.state.history.slice(0, 6).every((e) => e.name.includes('新建运行计划 · '))); })()"),
@@ -693,7 +693,7 @@ js("""(async () => {
 })()""" % json.dumps(runner_id))
 sleep(0.4)
 run5 = fire_and_wait()
-h.check("没开 stopOnError 就一路跑完", run5["totals"]["ran"] == 7 and run5["totals"]["failed"] == 1, run5["totals"])
+h.check("没开 stopOnError 就一路跑完", run5["totals"]["ran"] == 9 and run5["totals"]["failed"] == 1, run5["totals"])
 h.check("设了请求间隔就真的等过", run5["finishedAt"] - run5["startedAt"] >= 2500,
         run5["finishedAt"] - run5["startedAt"])
 
@@ -813,7 +813,12 @@ fired = js("""(async () => {
   r.schedule = { enabled: true, kind: 'interval', everyMinutes: 5, at: '09:00', anchorAt: Date.now() - 6 * 60000, lastFiredAt: Date.now() - 6 * 60000 };
   const before = s.state.runs[0] ? s.state.runs[0].id : null;
   await m.catchUp();
-  await new Promise((res) => setTimeout(res, 900));
+  // SSE 步骤要驻留 3 秒才落记录，轮询而不是赌固定延时
+  for (let i = 0; i < 20; i += 1) {
+    const now = s.state.runs[0];
+    if (now && now.id !== before && now.finishedAt) break;
+    await new Promise((res) => setTimeout(res, 500));
+  }
   const now = s.state.runs[0];
   return JSON.stringify({ fresh: (now && now.id) !== before, trigger: now && now.trigger });
 })()""")
@@ -825,6 +830,8 @@ missed = js("""(async () => {
   const s = await import('/js/state.js');
   const m = await import('/js/runner.js');
   const r = s.state.runners[0];
+  // 上一轮定时跑带着 SSE 驻留要 3 秒多；等它退场，否则 catchUp 会因"正在运行"跳过
+  for (let i = 0; i < 20 && m.sessionOf(r.id); i += 1) await new Promise((res) => setTimeout(res, 500));
   r.schedule = { enabled: true, kind: 'interval', everyMinutes: 5, anchorAt: Date.now() - 4 * 3600000, lastFiredAt: Date.now() - 4 * 3600000 };
   const before = s.state.runs.length;
   await m.catchUp();
